@@ -1,6 +1,6 @@
 # Guida all'Esecuzione
 
-Questo documento fornisce le istruzioni per configurare l'ambiente ed eseguire il modulo di **SVD from scratch** (Fase 1), il **rilevamento YOLO con selezione della ROI** (Fase 2) e l'**embedding del messaggio** (Fase 3).
+Questo documento fornisce le istruzioni per configurare l'ambiente ed eseguire il modulo di **SVD from scratch** (Fase 1), il **rilevamento YOLO con selezione della ROI** (Fase 2), l'**embedding del messaggio** (Fase 3) e l'**estrazione del messaggio** dalla stego-image (Fase 4).
 
 ## 1. Requisiti
 
@@ -208,7 +208,60 @@ Il report in console mostra anche:
 - **PSNR** (Peak Signal-to-Noise Ratio) tra cover e stego-image
 - **Verifica** immediata dell'estrazione del messaggio
 
-## 6. Opzioni Avanzate
+## 6. Fase 4 — Estrazione del Messaggio
+
+La Fase 4 esegue il processo inverso all'embedding: recupera il messaggio nascosto dalla stego-image **senza bisogno dell'immagine originale** (estrazione blind).
+
+### Estrazione Base
+
+```bash
+python main.py --image output/stego_image.png --extract
+```
+
+Questo comando:
+1. Ripassa la stego-image sotto YOLO per ritrovare le coordinate della ROI
+2. Suddivide la ROI in blocchi e applica la SVD custom ad ogni blocco
+3. Estrae i bit dal quoziente di quantizzazione dei valori singolari (QIM blind)
+4. Decodifica la sequenza binaria in testo e stampa il messaggio recuperato
+
+### Parametri di Estrazione
+
+> ⚠️ **Importante**: i parametri `--block-size`, `--sv-range`, `--delta` e `--strategy` devono corrispondere **esattamente** a quelli usati in fase di embedding. Se anche uno solo è diverso, il messaggio non sarà recuperabile.
+
+```bash
+# Estrazione con parametri di default (block-size=8, sv-range=mid, delta=15)
+python main.py --image output/stego_image.png --extract
+
+# Se l'embedding è stato fatto con sv-range first e delta 20
+python main.py --image stego.png --extract --sv-range first --delta 20
+
+# Se l'embedding è stato fatto con strategia A e blocchi 16×16
+python main.py --image stego.png --extract --strategy A --block-size 16
+
+# Combinazione completa dei parametri
+python main.py --image stego.png --extract \
+    --strategy C --sv-range mid --block-size 8 --delta 15
+```
+
+### Output Fase 4
+
+Il messaggio estratto viene stampato direttamente nel terminale. In aggiunta:
+
+| File | Descrizione |
+|------|-------------|
+| `extract_yolo_detections.png` | Stego-image con i bounding box YOLO evidenziati (verifica che la ROI sia la stessa) |
+
+### Troubleshooting
+
+Se l'estrazione non recupera il messaggio corretto, verificare:
+
+| Problema | Possibile causa | Soluzione |
+|----------|----------------|-----------|
+| Messaggio vuoto o illeggibile | Parametri non corrispondenti | Usare gli stessi `--sv-range`, `--block-size`, `--delta` dell'embedding |
+| ROI diversa | Strategia diversa o YOLO rileva box differenti | Usare la stessa `--strategy` e `--yolo-confidence` |
+| Caratteri corrotti | Immagine compressa dopo l'embedding | Assicurarsi che la stego-image sia in formato PNG (lossless) |
+
+## 7. Opzioni Avanzate
 
 Visualizza tutti i parametri disponibili:
 
@@ -223,21 +276,22 @@ python main.py --help
 | `--no-validate` | Salta i test matematici iniziali |
 | `--mean-centering-test` | Testa impatto del mean centering |
 | `--yolo` | Attiva la Fase 2 (YOLO + ROI) |
-| `--strategy`, `-s` | Strategia di embedding: A, B, C (default: C) |
+| `--strategy`, `-s` | Strategia di embedding/estrazione: A, B, C (default: C) |
 | `--box-index` | Indice del bounding box (solo strategia A) |
 | `--yolo-model` | Modello YOLOv8 (default: `yolov8n.pt`) |
 | `--yolo-confidence` | Soglia di confidenza YOLO (default: 0.25) |
 | `--embed` | Attiva l'embedding del messaggio (Fase 3) |
 | `--message`, `-m` | Il messaggio segreto da nascondere |
-| `--sv-range` | Quali SV modificare: `first`, `mid`, `last` (default: `mid`) |
+| `--extract` | Attiva l'estrazione del messaggio (Fase 4) |
+| `--sv-range` | Quali SV modificare/leggere: `first`, `mid`, `last` (default: `mid`) |
 | `--block-size` | Dimensione blocchi SVD: 4, 8, 16 (default: 8) |
 | `--delta` | Passo di quantizzazione QIM (default: 15.0) |
 
-## 7. Struttura del Progetto
+## 8. Struttura del Progetto
 
 - `src/svd.py`: Implementazione core dell'algoritmo SVD tramite metodo delle potenze e deflazione.
 - `src/image_utils.py`: Funzioni per conversione immagini, padding, blocchi e mean centering.
 - `src/validation.py`: Logica di confronto tra l'implementazione custom e quella ufficiale di NumPy.
 - `src/yolo_roi.py`: **[Fase 2]** Integrazione YOLOv8 per object detection e selezione della ROI con strategie A/B/C.
-- `src/steganography.py`: **[Fase 3]** Embedding e estrazione del payload tramite SVD + QIM (Quantization Index Modulation).
-- `main.py`: Entry point del programma con CLI completa.
+- `src/steganography.py`: **[Fase 3/4]** Embedding e estrazione blind del payload tramite SVD + QIM (Quantization Index Modulation).
+- `main.py`: Entry point del programma con CLI completa (Fasi 1–4).
