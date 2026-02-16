@@ -3,17 +3,20 @@ Main entry point — SVD Image Steganography.
 
 Fase 1: Implementazione Matematica della SVD "from scratch".
 Fase 2: Selezione della ROI con YOLOv8.
+Fase 3: Embedding del messaggio nei valori singolari.
 
 Questo script:
 1. Esegue la suite di validazione della SVD custom vs numpy
 2. Testa il mean centering su un'immagine (se fornita)
 3. Dimostra la compressione/ricostruzione di un'immagine con la SVD custom
 4. (Fase 2) Rileva oggetti con YOLOv8 e seleziona la ROI per la steganografia
+5. (Fase 3) Nasconde un messaggio nell'immagine tramite SVD + QIM
 
 Uso:
     python main.py                              # Solo validazione matrici
     python main.py --image <percorso_immagine>  # Validazione + test su immagine
     python main.py --image img.png --yolo       # Fase 2: Rilevamento YOLO + ROI
+    python main.py --image foto.png --embed --message "Ciao!"  # Fase 3: Embedding
 """
 
 import argparse
@@ -230,12 +233,191 @@ def demo_yolo_roi(
 
 
 # ═══════════════════════════════════════════════════════════════
+#  FASE 3 — Embedding del Messaggio
+# ═══════════════════════════════════════════════════════════════
+
+def demo_embed(
+    image_path: str,
+    message: str,
+    strategy: str = "C",
+    box_index: int | None = None,
+    model_name: str = "yolov8n.pt",
+    confidence: float = 0.25,
+    block_size: int = 8,
+    sv_range: str = "mid",
+    delta: float = 15.0,
+    output_dir: str = "output",
+) -> None:
+    """
+    Fase 3 — Embedding completo: YOLO ROI + SVD steganography.
+
+    1. Rileva gli oggetti con YOLO e seleziona la ROI
+    2. Converte il messaggio in binario
+    3. Incorpora il payload nei valori singolari della ROI
+    4. Ricostruisce la stego-image
+    5. Verifica estraendo il messaggio dalla stego-image
+
+    Parametri
+    ---------
+    image_path : str
+        Percorso dell'immagine di cover.
+    message : str
+        Il messaggio segreto da nascondere.
+    strategy : str
+        Strategia di selezione ROI: 'A', 'B', 'C'.
+    box_index : int | None
+        Indice del bounding box (solo strategia A).
+    model_name : str
+        Modello YOLOv8.
+    confidence : float
+        Soglia di confidenza YOLO.
+    block_size : int
+        Dimensione dei blocchi per la SVD (default: 8).
+    sv_range : str
+        Quali SV modificare: 'first', 'mid', 'last'.
+    delta : float
+        Passo di quantizzazione QIM.
+    output_dir : str
+        Cartella di output.
+    """
+    from src.yolo_roi import (
+        load_yolo_model,
+        detect_objects,
+        select_roi,
+        extract_roi_region,
+        draw_detections,
+        print_detection_report,
+    )
+    from src.steganography import (
+        text_to_binary,
+        binary_to_text,
+        embed_in_full_image,
+        extract_from_full_image,
+        compute_capacity,
+        print_embed_report,
+    )
+    from src.image_utils import load_image_as_matrix, save_image
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"\n{'═' * 60}")
+    print(f"  FASE 3 — EMBEDDING DEL MESSAGGIO")
+    print(f"{'═' * 60}")
+    print(f"\n  📷 Immagine di cover: {image_path}")
+    print(f"  💬 Messaggio: \"{message}\"")
+    print(f"  📏 Lunghezza messaggio: {len(message)} caratteri ({len(message) * 8 + 8} bit con terminatore)")
+
+    # ─── Step 1: YOLO Detection + ROI ───
+    print(f"\n  ── Step 1: Rilevamento YOLO + selezione ROI ──")
+    model = load_yolo_model(model_name)
+    bounding_boxes = detect_objects(model, image_path, confidence_threshold=confidence)
+
+    img_matrix = load_image_as_matrix(image_path, grayscale=True)
+    image_shape = img_matrix.shape[:2]
+
+    roi_result = select_roi(image_shape, bounding_boxes, strategy=strategy, box_index=box_index)
+    print_detection_report(bounding_boxes, roi_result, image_shape)
+
+    # Determina le coordinate della ROI
+    if roi_result.selected_box is not None:
+        bb = roi_result.selected_box
+        roi_coords = (bb.y1, bb.x1, bb.y2, bb.x2)
+    else:
+        # Strategia B o nessun oggetto rilevato: usa l'intera immagine
+        roi_coords = (0, 0, image_shape[0], image_shape[1])
+
+    y1, x1, y2, x2 = roi_coords
+    roi_matrix = img_matrix[y1:y2, x1:x2]
+    print(f"\n  📐 ROI selezionata: ({x1},{y1})→({x2},{y2}) = {y2 - y1}×{x2 - x1} pixel")
+
+    # ─── Step 2: Verifica capacità ───
+    print(f"\n  ── Step 2: Verifica capacità ──")
+    capacity = compute_capacity(roi_matrix, block_size, sv_range)
+    payload_bits = text_to_binary(message)
+
+    print(f"     Capacità totale:    {capacity['total_bits']} bit ({capacity['max_text_chars']} caratteri max)")
+    print(f"     Payload richiesto:  {len(payload_bits)} bit ({len(message)} caratteri + terminatore)")
+
+    if len(payload_bits) > capacity['total_bits']:
+        max_chars = capacity['max_text_chars']
+        print(f"\n  ❌ Errore: il messaggio è troppo lungo!")
+        print(f"     La ROI può contenere al massimo {max_chars} caratteri.")
+        print(f"     Suggerimenti:")
+        print(f"       - Riduci il messaggio a {max_chars} caratteri")
+        print(f"       - Usa blocchi più piccoli (--block-size 4)")
+        print(f"       - Usa sv_range 'first' o 'last' per più bit per blocco")
+        print(f"       - Scegli una ROI più grande (strategia B per sfondo)")
+        return
+
+    print(f"     ✅ Capacità sufficiente!")
+
+    # ─── Step 3: Embedding ───
+    print(f"\n  ── Step 3: Embedding SVD + QIM ──")
+    print(f"     Block size:    {block_size}×{block_size}")
+    print(f"     SV range:      {sv_range}")
+    print(f"     Delta (QIM):   {delta}")
+
+    stego_image, embed_info = embed_in_full_image(
+        img_matrix, roi_coords, payload_bits,
+        block_size=block_size, sv_range=sv_range, delta=delta,
+    )
+
+    print_embed_report(embed_info)
+
+    # ─── Step 4: Salvataggio ───
+    print(f"\n  ── Step 4: Salvataggio stego-image ──")
+    stego_path = os.path.join(output_dir, "stego_image.png")
+    save_image(stego_image, stego_path)
+    print(f"     💾 Stego-image salvata: {stego_path}")
+
+    # Salva anche l'immagine annotata con YOLO
+    annotated_img = draw_detections(image_path, bounding_boxes, roi_result)
+    annotated_path = os.path.join(output_dir, "yolo_detections.png")
+    annotated_img.save(annotated_path)
+    print(f"     💾 Immagine con detection: {annotated_path}")
+
+    # ─── Step 5: Verifica (estrazione) ───
+    print(f"\n  ── Step 5: Verifica — Estrazione del messaggio ──")
+    extracted_bits = extract_from_full_image(
+        stego_image, roi_coords,
+        block_size=block_size, sv_range=sv_range, delta=delta,
+        max_bits=len(payload_bits),
+    )
+    extracted_message = binary_to_text(extracted_bits)
+
+    print(f"     Messaggio originale: \"{message}\"")
+    print(f"     Messaggio estratto:  \"{extracted_message}\"")
+
+    if extracted_message == message:
+        print(f"\n  ✅ VERIFICA SUPERATA! Il messaggio è stato estratto correttamente.")
+    else:
+        print(f"\n  ⚠️  VERIFICA FALLITA — il messaggio estratto non corrisponde.")
+        # Confronto dettagliato
+        matching_bits = np.sum(payload_bits[:len(extracted_bits)] == extracted_bits[:len(payload_bits)])
+        total_compare = min(len(payload_bits), len(extracted_bits))
+        print(f"     Bit corrispondenti: {matching_bits}/{total_compare} ({matching_bits / total_compare * 100:.1f}%)")
+
+    # ─── Step 6: Metriche visive (anteprima Fase 5) ───
+    psnr = _compute_psnr(img_matrix, stego_image)
+    print(f"\n  📊 Qualità visiva:")
+    print(f"     PSNR (cover vs stego): {psnr:.2f} dB")
+    if psnr > 40:
+        print(f"     ✅ PSNR > 40 dB → alterazioni impercettibili!")
+    elif psnr > 30:
+        print(f"     ⚠️  PSNR 30-40 dB → alterazioni minime, possibili lievi artefatti.")
+    else:
+        print(f"     ❌ PSNR < 30 dB → alterazioni visibili. Prova un delta più basso.")
+
+    print(f"\n  🎉 Fase 3 completata! Output salvati in '{output_dir}/'")
+
+
+# ═══════════════════════════════════════════════════════════════
 #  CLI — Entry Point
 # ═══════════════════════════════════════════════════════════════
 
 def main():
     parser = argparse.ArgumentParser(
-        description="SVD Image Steganography — Validazione, Demo e YOLO ROI",
+        description="SVD Image Steganography — Validazione, Demo, YOLO ROI e Embedding",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Esempi:
@@ -248,6 +430,12 @@ Esempi:
   python main.py --image foto.png --yolo --strategy B   # YOLO con strategia B (sfondo)
   python main.py --image foto.png --yolo --strategy C   # YOLO con strategia C (auto, default)
   python main.py --image foto.png --yolo --box-index 1  # Usa il 2° bounding box (strategia A)
+
+  # Fase 3: Embedding del messaggio
+  python main.py --image foto.png --embed --message "Messaggio segreto"
+  python main.py --image foto.png --embed --message "Test" --sv-range first
+  python main.py --image foto.png --embed --message "Test" --sv-range last
+  python main.py --image foto.png --embed --message "Test" --block-size 16 --delta 20
         """,
     )
     # ── Fase 1 ──
@@ -288,14 +476,47 @@ Esempi:
         help="Soglia di confidenza per le detection YOLO (default: 0.25)",
     )
 
+    # ── Fase 3 ──
+    parser.add_argument("--embed", action="store_true", help="Attiva l'embedding del messaggio (Fase 3)")
+    parser.add_argument(
+        "--message", "-m",
+        type=str,
+        default=None,
+        help="Il messaggio segreto da nascondere nella stego-image.",
+    )
+    parser.add_argument(
+        "--sv-range",
+        type=str,
+        default="mid",
+        choices=["first", "mid", "last"],
+        help=(
+            "Quali valori singolari modificare per l'embedding: "
+            "first=primi (robusto, artefatti visibili), "
+            "mid=intermedi (miglior compromesso, default), "
+            "last=ultimi (invisibile, fragile a JPEG)"
+        ),
+    )
+    parser.add_argument(
+        "--block-size",
+        type=int,
+        default=8,
+        help="Dimensione dei blocchi per la SVD (default: 8). Valori comuni: 4, 8, 16.",
+    )
+    parser.add_argument(
+        "--delta",
+        type=float,
+        default=15.0,
+        help="Passo di quantizzazione QIM (default: 15.0). Più grande = più robusto ma più visibile.",
+    )
+
     args = parser.parse_args()
 
     # Step 1: Validazione SVD (Fase 1)
-    if not args.no_validate and not args.yolo:
+    if not args.no_validate and not args.yolo and not args.embed:
         run_all_tests()
 
     # Step 2: Demo SVD su immagine (Fase 1)
-    if args.image and not args.yolo:
+    if args.image and not args.yolo and not args.embed:
         if not os.path.exists(args.image):
             print(f"\n  ❌ Errore: file '{args.image}' non trovato!")
             sys.exit(1)
@@ -307,7 +528,7 @@ Esempi:
             test_mean_centering_impact(args.image)
 
     # Step 4: Fase 2 — YOLO detection + ROI
-    if args.yolo:
+    if args.yolo and not args.embed:
         if not args.image:
             print("\n  ❌ Errore: --yolo richiede --image <percorso_immagine>!")
             sys.exit(1)
@@ -324,7 +545,32 @@ Esempi:
             output_dir=args.output,
         )
 
-    if not args.image and args.no_validate and not args.yolo:
+    # Step 5: Fase 3 — Embedding del messaggio
+    if args.embed:
+        if not args.image:
+            print("\n  ❌ Errore: --embed richiede --image <percorso_immagine>!")
+            sys.exit(1)
+        if not os.path.exists(args.image):
+            print(f"\n  ❌ Errore: file '{args.image}' non trovato!")
+            sys.exit(1)
+        if not args.message:
+            print("\n  ❌ Errore: --embed richiede --message <messaggio_segreto>!")
+            sys.exit(1)
+
+        demo_embed(
+            image_path=args.image,
+            message=args.message,
+            strategy=args.strategy,
+            box_index=args.box_index,
+            model_name=args.yolo_model,
+            confidence=args.yolo_confidence,
+            block_size=args.block_size,
+            sv_range=args.sv_range,
+            delta=args.delta,
+            output_dir=args.output,
+        )
+
+    if not args.image and args.no_validate and not args.yolo and not args.embed:
         print("  ⚠️  Nessuna operazione eseguita. Usa --help per vedere le opzioni.")
 
 

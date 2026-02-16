@@ -1,6 +1,6 @@
 # Guida all'Esecuzione
 
-Questo documento fornisce le istruzioni per configurare l'ambiente ed eseguire il modulo di **SVD from scratch** (Fase 1) e il **rilevamento YOLO con selezione della ROI** (Fase 2).
+Questo documento fornisce le istruzioni per configurare l'ambiente ed eseguire il modulo di **SVD from scratch** (Fase 1), il **rilevamento YOLO con selezione della ROI** (Fase 2) e l'**embedding del messaggio** (Fase 3).
 
 ## 1. Requisiti
 
@@ -136,7 +136,79 @@ La Fase 2 salva nella cartella `output/`:
 | `roi_mask.png` | Maschera binaria della ROI (bianco = area utilizzabile) |
 | `roi_reconstructed_k*.png` | Ricostruzioni SVD della ROI a diversi livelli di compressione |
 
-## 5. Opzioni Avanzate
+## 5. Fase 3 — Embedding del Messaggio
+
+La Fase 3 combina YOLO (ROI) + SVD custom per nascondere un messaggio di testo all'interno dell'immagine.
+
+### Embedding Base
+
+```bash
+python main.py --image foto.png --embed --message "Messaggio segreto"
+```
+
+Questo comando:
+1. Rileva oggetti con YOLO e seleziona la ROI (strategia C di default)
+2. Converte il messaggio in sequenza binaria
+3. Suddivide la ROI in blocchi 8×8 e applica la SVD custom
+4. Modifica i valori singolari intermedi con QIM (Quantization Index Modulation)
+5. Ricostruisce la stego-image e la salva
+6. Verifica l'embedding estraendo immediatamente il messaggio
+
+### Scelta dei Valori Singolari (flag `--sv-range`)
+
+Il flag `--sv-range` permette di testare quale range di valori singolari alterare:
+
+| Range | Flag | Comportamento | Trade-off |
+|-------|------|---------------|-----------|
+| **Primi** | `--sv-range first` | Modifica i primi ~1/3 dei SV | Massima robustezza, ma artefatti visibili |
+| **Intermedi** | `--sv-range mid` | Modifica i SV centrali (default) | Miglior compromesso tra invisibilità e robustezza |
+| **Ultimi** | `--sv-range last` | Modifica gli ultimi ~1/3 dei SV | Invisibile all'occhio, ma vulnerabile a JPEG |
+
+**Esempi per il test comparativo:**
+
+```bash
+# Test con i primi valori singolari (più robusto)
+python main.py --image foto.png --embed --message "Test" --sv-range first
+
+# Test con i valori intermedi (compromesso, default)
+python main.py --image foto.png --embed --message "Test" --sv-range mid
+
+# Test con gli ultimi valori singolari (più invisibile)
+python main.py --image foto.png --embed --message "Test" --sv-range last
+```
+
+### Parametri di Embedding Avanzati
+
+```bash
+# Blocchi più grandi (16×16) per immagini di alta risoluzione
+python main.py --image foto.png --embed --message "Test" --block-size 16
+
+# Delta più alto = più robusto ma alterazioni più evidenti
+python main.py --image foto.png --embed --message "Test" --delta 25
+
+# Delta più basso = meno visibile ma più fragile
+python main.py --image foto.png --embed --message "Test" --delta 5
+
+# Combinazione completa con strategia A e parametri custom
+python main.py --image foto.png --embed --message "Top Secret" \
+    --strategy A --sv-range mid --block-size 8 --delta 15
+```
+
+### Output Fase 3
+
+La Fase 3 salva nella cartella `output/`:
+
+| File | Descrizione |
+|------|-------------|
+| `stego_image.png` | L'immagine con il messaggio nascosto |
+| `yolo_detections.png` | Immagine con i bounding box YOLO evidenziati |
+
+Il report in console mostra anche:
+- **Capacità** della ROI (quanti bit/caratteri si possono nascondere)
+- **PSNR** (Peak Signal-to-Noise Ratio) tra cover e stego-image
+- **Verifica** immediata dell'estrazione del messaggio
+
+## 6. Opzioni Avanzate
 
 Visualizza tutti i parametri disponibili:
 
@@ -155,11 +227,17 @@ python main.py --help
 | `--box-index` | Indice del bounding box (solo strategia A) |
 | `--yolo-model` | Modello YOLOv8 (default: `yolov8n.pt`) |
 | `--yolo-confidence` | Soglia di confidenza YOLO (default: 0.25) |
+| `--embed` | Attiva l'embedding del messaggio (Fase 3) |
+| `--message`, `-m` | Il messaggio segreto da nascondere |
+| `--sv-range` | Quali SV modificare: `first`, `mid`, `last` (default: `mid`) |
+| `--block-size` | Dimensione blocchi SVD: 4, 8, 16 (default: 8) |
+| `--delta` | Passo di quantizzazione QIM (default: 15.0) |
 
-## 6. Struttura del Progetto
+## 7. Struttura del Progetto
 
 - `src/svd.py`: Implementazione core dell'algoritmo SVD tramite metodo delle potenze e deflazione.
 - `src/image_utils.py`: Funzioni per conversione immagini, padding, blocchi e mean centering.
 - `src/validation.py`: Logica di confronto tra l'implementazione custom e quella ufficiale di NumPy.
 - `src/yolo_roi.py`: **[Fase 2]** Integrazione YOLOv8 per object detection e selezione della ROI con strategie A/B/C.
+- `src/steganography.py`: **[Fase 3]** Embedding e estrazione del payload tramite SVD + QIM (Quantization Index Modulation).
 - `main.py`: Entry point del programma con CLI completa.
