@@ -5,18 +5,17 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.svd import svd, svd_compact, reconstruct
+from src.svd import svd_compact, reconstruct
 from src.image_utils import split_into_blocks, merge_blocks
 from src.steganography import (
     text_to_binary,
     binary_to_text,
-    embed_message,
-    extract_message,
     embed_in_full_image,
     extract_from_full_image,
     compute_capacity,
 )
-from src.validation import _compute_psnr
+from src.image_utils import compute_psnr
+from src.yolo_roi import BoundingBox, select_roi, extract_roi_region
 
 def print_header(title):
     print(f"{'' * 60}")
@@ -148,7 +147,7 @@ def test_embed_extract_roundtrip():
         extracted_message = binary_to_text(extracted_bits)
         elapsed = time.time() - t0
 
-        psnr = _compute_psnr(image, stego_image)
+        psnr = compute_psnr(image, stego_image)
         ber = np.sum(payload_bits[:len(extracted_bits)] != extracted_bits[:len(payload_bits)]) / len(payload_bits)
         correct = extracted_message == message
 
@@ -178,7 +177,7 @@ def test_visual_quality():
             image, roi_coords, payload_bits,
             block_size=8, sv_range="mid", delta=delta,
         )
-        psnr = _compute_psnr(image, stego_image)
+        psnr = compute_psnr(image, stego_image)
 
         passed = psnr > 15.0
         all_passed &= print_result(
@@ -287,7 +286,7 @@ def test_sv_ranges():
             max_bits=len(payload_bits),
         )
         extracted = binary_to_text(extracted_bits)
-        psnr = _compute_psnr(image, stego)
+        psnr = compute_psnr(image, stego)
 
         all_passed &= print_result(
             f"sv_range='{sv_range}'",
@@ -295,6 +294,111 @@ def test_sv_ranges():
             f"{'OK' if extracted == message else f'estratto: \"{extracted}\"'}  "
             f"cap={capacity['total_bits']}bit  PSNR={psnr:.1f}dB"
         )
+
+    return all_passed
+
+def test_roi_selection():
+    print_header("TEST 7 — Selezione ROI")
+    all_passed = True
+
+    bb1 = BoundingBox(10, 20, 50, 80, 0.95, 0, "person")
+    all_passed &= print_result(
+        "BoundingBox properties",
+        bb1.width == 40 and bb1.height == 60 and bb1.area == 2400,
+        f"width={bb1.width}, height={bb1.height}, area={bb1.area}"
+    )
+
+    bb_large = BoundingBox(10, 10, 90, 90, 0.9, 0, "person")
+    bb_small = BoundingBox(50, 50, 70, 70, 0.8, 1, "cat")
+    bboxes = [bb_large, bb_small]
+    image_shape = (100, 100)
+
+    roi_a = select_roi(image_shape, bboxes, strategy="A")
+    all_passed &= print_result(
+        "Strategia A (soggetto, box piu grande)",
+        roi_a.selected_box == bb_large and roi_a.strategy == "A",
+        f"box={roi_a.selected_box.class_name}, area={roi_a.selected_box.area}"
+    )
+
+    roi_a2 = select_roi(image_shape, bboxes, strategy="A", box_index=1)
+    all_passed &= print_result(
+        "Strategia A (box_index=1)",
+        roi_a2.selected_box == bb_small,
+        f"box={roi_a2.selected_box.class_name}, area={roi_a2.selected_box.area}"
+    )
+
+    roi_b = select_roi(image_shape, bboxes, strategy="B")
+    inside_large = roi_b.mask[bb_large.y1:bb_large.y2, bb_large.x1:bb_large.x2]
+    all_passed &= print_result(
+        "Strategia B (sfondo, esclude i box)",
+        not np.any(inside_large) and roi_b.strategy == "B",
+        f"pixel ROI={roi_b.roi_pixel_count}"
+    )
+
+    roi_c = select_roi(image_shape, bboxes, strategy="C")
+    all_passed &= print_result(
+        "Strategia C (automatico, box piu grande)",
+        roi_c.selected_box == bb_large and roi_c.strategy == "C",
+        f"box={roi_c.selected_box.class_name}, area={roi_c.selected_box.area}"
+    )
+
+    roi_empty = select_roi(image_shape, [], strategy="A")
+    all_passed &= print_result(
+        "Nessuna detection (fallback intera immagine)",
+        np.all(roi_empty.mask) and roi_empty.selected_box is None,
+        f"pixel ROI={roi_empty.roi_pixel_count} (atteso {100 * 100})"
+    )
+
+    rng = np.random.default_rng(42)
+    image_matrix = rng.standard_normal((100, 100)) * 40 + 128
+    roi_region = extract_roi_region(image_matrix, roi_c)
+    expected_shape = (bb_large.y2 - bb_large.y1, bb_large.x2 - bb_large.x1)
+    all_passed &= print_result(
+        "extract_roi_region (con selected_box)",
+        roi_region.shape == expected_shape,
+        f"shape={roi_region.shape}, atteso={expected_shape}"
+    )
+
+    rng2 = np.random.default_rng(42)
+    image = rng2.standard_normal((64, 64)) * 40 + 128
+    image = np.clip(image, 0, 255)
+
+    bb_roi = BoundingBox(8, 8, 56, 56, 0.95, 0, "object")
+    roi_result = select_roi((64, 64), [bb_roi], strategy="C")
+    bb = roi_result.selected_box
+    roi_coords = (bb.y1, bb.x1, bb.y2, bb.x2)
+
+    message = "ROI test"
+    payload_bits = text_to_binary(message)
+
+    stego_image, embed_info = embed_in_full_image(
+        image, roi_coords, payload_bits,
+        block_size=8, sv_range="mid", delta=15.0,
+    )
+    extracted_bits = extract_from_full_image(
+        stego_image, image, roi_coords,
+        block_size=8, sv_range="mid",
+        max_bits=len(payload_bits),
+    )
+    extracted_message = binary_to_text(extracted_bits)
+    psnr = compute_psnr(image, stego_image)
+
+    all_passed &= print_result(
+        "Integrazione ROI + embed/extract",
+        extracted_message == message,
+        f"{'OK' if extracted_message == message else f'estratto: "{extracted_message}"'}  "
+        f"PSNR={psnr:.1f}dB"
+    )
+
+    outside_unchanged = (
+        np.array_equal(image[:8, :], stego_image[:8, :]) and
+        np.array_equal(image[56:, :], stego_image[56:, :])
+    )
+    all_passed &= print_result(
+        "Pixel fuori dalla ROI invariati",
+        outside_unchanged,
+        "OK" if outside_unchanged else "pixel modificati fuori ROI"
+    )
 
     return all_passed
 
@@ -312,6 +416,7 @@ if __name__ == "__main__":
     results.append(("Qualità visiva", test_visual_quality()))
     results.append(("Edge cases", test_edge_cases()))
     results.append(("SV ranges", test_sv_ranges()))
+    results.append(("Selezione ROI", test_roi_selection()))
 
     elapsed = time.time() - t_start
 

@@ -36,44 +36,6 @@ def binary_to_text(bits: np.ndarray) -> str:
 
     return ''.join(chars)
 
-def image_to_binary(image_matrix: np.ndarray) -> np.ndarray:
-
-    h, w = image_matrix.shape[:2]
-    pixels = np.clip(image_matrix, 0, 255).astype(np.uint8).flatten()
-
-    bits = []
-    for dim in [h, w]:
-        for i in range(15, -1, -1):
-            bits.append((dim >> i) & 1)
-    for px in pixels:
-        for i in range(7, -1, -1):
-            bits.append((px >> i) & 1)
-
-    return np.array(bits, dtype=np.int32)
-
-def binary_to_image(bits: np.ndarray) -> np.ndarray:
-
-    h = 0
-    for i in range(16):
-        h = (h << 1) | int(bits[i])
-    w = 0
-    for i in range(16, 32):
-        w = (w << 1) | int(bits[i])
-
-    pixel_bits = bits[32:]
-    n_pixels = h * w
-    pixels = []
-    for i in range(0, min(n_pixels * 8, len(pixel_bits)), 8):
-        byte_val = 0
-        for bit in pixel_bits[i:i + 8]:
-            byte_val = (byte_val << 1) | int(bit)
-        pixels.append(byte_val)
-
-    pixels = np.array(pixels[:n_pixels], dtype=np.uint8)
-    if len(pixels) < n_pixels:
-        pixels = np.pad(pixels, (0, n_pixels - len(pixels)))
-
-    return pixels.reshape(h, w).astype(np.float64)
 
 def compute_capacity(
     roi_matrix: np.ndarray,
@@ -88,7 +50,7 @@ def compute_capacity(
     n_blocks = h_blocks * w_blocks
 
     sv_per_block = block_size
-    bits_per_block = _get_sv_indices_count(sv_per_block, sv_range)
+    bits_per_block = len(_get_sv_indices(sv_per_block, sv_range))
 
     total_bits = n_blocks * bits_per_block
     max_text_chars = (total_bits // 7) - 1
@@ -103,10 +65,6 @@ def compute_capacity(
         "max_text_chars": max_text_chars,
         "sv_range": sv_range,
     }
-
-def _get_sv_indices_count(n_sv: int, sv_range: str) -> int:
-
-    return len(_get_sv_indices(n_sv, sv_range))
 
 def _get_sv_indices(n_sv: int, sv_range: str) -> list[int]:
 
@@ -265,36 +223,3 @@ def extract_from_full_image(
     original_roi = original_image[y1:y2, x1:x2].copy()
 
     return extract_message(stego_roi, original_roi, block_size, sv_range, max_bits)
-
-def print_embed_report(embed_info: dict) -> None:
-
-    sv_names = {
-        "first": "Primi (massima robustezza, artefatti visibili)",
-        "mid": "Intermedi (miglior compromesso)",
-        "last": "Ultimi (invisibile, vulnerabile a JPEG)",
-    }
-
-    print(f"{'' * 60}")
-    print("REPORT EMBEDDING")
-    print(f"{'' * 60}")
-    print("Parametri:")
-    print(f"Block size:          {embed_info['block_size']}×{embed_info['block_size']}")
-    print(f"Valori singolari:    {embed_info['sv_range']} — {sv_names.get(embed_info['sv_range'], '?')}")
-    print(f"Delta:               {embed_info['delta']}")
-    print(f"Numero blocchi:      {embed_info['n_blocks']}")
-    print("Payload:")
-    print(f"Bit del payload:     {embed_info['total_payload_bits']}")
-    print(f"Bit incorporati:     {embed_info['bits_embedded']}")
-    print(f"Capacità totale:     {embed_info['capacity_bits']} bit")
-    print(f"Utilizzo capacità:   {embed_info['utilization_pct']:.1f}%")
-
-    if embed_info["payload_fully_embedded"]:
-        print("Payload incorporato con successo!")
-    else:
-        print("Payload TRONCATO! Capacità insufficiente.")
-
-    if "roi_coords" in embed_info:
-        y1, x1, y2, x2 = embed_info["roi_coords"]
-        print("ROI: ({x1},{y1})→({x2},{y2})")
-
-    print(f"{'' * 60}")

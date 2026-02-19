@@ -1,207 +1,127 @@
-# 🧪 Suite di Test — Valutazione Performance Steganografia SVD
+# 🧪 Suite di Test — Steganografia SVD
 
-Questo documento descrive la suite di test implementata in `tests/test_performance.py` per valutare le performance dell'algoritmo di steganografia al variare di tutti i parametri.
+Questo progetto include due suite di test complementari: una per la verifica rapida della correttezza funzionale (`tests/quick_test.py`) e una per l'analisi approfondita delle performance e della robustezza (`tests/test_performance.py`).
 
 ---
 
-## Esecuzione
+## 1. Quick Test (`tests/quick_test.py`)
+
+**Scopo**: Verificare in pochi secondi che tutti i componenti fondamentali del sistema funzionino correttamente dal punto di vista matematico e logico. È il test da lanciare dopo ogni modifica al codice (Regression Testing).
+
+### Esecuzione
 
 ```bash
-# Tutti i test con immagine sintetica (256×256)
-python tests/test_performance.py
-
-# Tutti i test con un'immagine reale
-python tests/test_performance.py --image percorso/immagine.png
-
-# Singolo test (es. solo il test 2)
-python tests/test_performance.py --test 2
-
-# Output in una directory specifica
-python tests/test_performance.py --output risultati/
+python tests/quick_test.py
 ```
 
-I risultati vengono stampati in console come tabelle formattate e salvati in file CSV nella directory di output (`test_output/` di default).
+### Funzionamento Dettagliato
+
+Lo script esegue 7 batterie di test su dati sintetici generati casualmente (piccole matrici) per garantire la massima velocità:
+
+1.  **TEST 1 — Correttezza SVD**: Confronta l'implementazione custom di `svd_compact` con `np.linalg.svd`. Verifica l'errore sui valori singolari, l'errore di ricostruzione della matrice originale e l'ortogonalità delle matrici U e V.
+2.  **TEST 2 — Conversione Testo ↔ Binario**: Verifica che la trasformazione delle stringhe in bit e viceversa sia reversibile senza perdite (bit-perfect).
+3.  **TEST 3 — Roundtrip Embedding/Extraction**: Esegue cicli completi di inserimento ed estrazione su matrici 32×32 con diverse combinazioni di parametri (block size, range, delta), verificando che il messaggio estratto coincida con l'originale.
+4.  **TEST 4 — Qualità Visiva (Coarse)**: Controlla che il PSNR non scenda sotto soglie critiche per diversi valori di delta.
+5.  **TEST 5 — Edge Cases**: Verifica il comportamento con immagini uniformi (tutte grigie), valori estremi (0 o 255) e matrici con dimensioni non multiple del block size.
+6.  **TEST 6 — Consistenza SV Range**: Assicura che le tre strategie di selezione (`first`, `mid`, `last`) siano tutte funzionanti e coerenti.
+7.  **TEST 7 — Selezione ROI**: Testa la logica di YOLO/ROI (class `BoundingBox` e strategie A, B, C) e verifica che i pixel esterni alla ROI non vengano minimamente modificati durante l'embedding.
 
 ---
 
-## Test Implementati
+## 2. Performance Test (`tests/test_performance.py`)
 
-### Test 1 — Sweep Completo dei Parametri
+**Scopo**: Valutare le performance dell'algoritmo al variare di tutti i parametri critici e misurarne la robustezza contro attacchi comuni o degradazioni dell'immagine.
 
-**Obiettivo**: Valutare l'algoritmo su **tutte le combinazioni** di parametri.
+### Esecuzione
 
-| Parametro    | Valori testati                                    |
-| ------------ | ------------------------------------------------- |
-| `block_size` | 4, 8, 16                                          |
-| `sv_range`   | first, mid, last                                  |
-| `delta`      | 5, 10, 15, 20, 25, 30                             |
-| Messaggio    | corto (6 char), medio (54 char), lungo (120 char) |
+```bash
+# Test standard con immagine sintetica (64×64 o 256×256)
+python tests/test_performance.py
 
-**Metriche misurate**: PSNR, SSIM, BER, correttezza, tempo di esecuzione.  
-**Combinazioni totali**: 3 × 3 × 6 × 3 = **162 test**.  
-**Output CSV**: `results_sweep.csv`
+# Test con un'immagine reale specifica
+python tests/test_performance.py --image percorso/immagine.png
 
----
+# Esegui solo un test specifico (es. Test 4 sul rumore)
+python tests/test_performance.py --test 4 --image percorso/immagine.png
 
-### Test 2 — Impatto del Delta sulla Qualità Visiva
+# Specifica la directory per i file CSV e le immagini di output
+python tests/test_performance.py --output risultati_analisi/
+```
 
-**Obiettivo**: Trovare il **trade-off ottimale** tra robustezza e invisibilità variando delta con granularità fine.
+### Test Implementati in Dettaglio
 
-| Parametro  | Valori fissi                              |
-| ---------- | ----------------------------------------- |
-| Block size | 8                                         |
-| SV range   | mid                                       |
-| Delta      | 1, 2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50 |
+#### Test 1 — Sweep Completo dei Parametri
 
-**Cosa si aspetta**: Al crescere di delta, il PSNR decresce (alterazione più visibile) ma la robustezza aumenta.  
-**Output CSV**: `results_delta.csv`
+Valuta l'algoritmo su **162 combinazioni** (3 block_sizes × 3 sv_ranges × 6 deltas × 3 lunghezze messaggio). Identifica quali configurazioni falliscono per capacità insufficiente e calcola le medie globali di PSNR e SSIM.
 
----
+#### Test 2 — Impatto del Delta
 
-### Test 3 — Analisi della Capacità
+Analizza con granularità fine (12 valori da 1.0 a 50.0) come varia la qualità visiva. È fondamentale per tracciare la curva di trade-off tra invisibilità e robustezza.
 
-**Obiettivo**: Calcolare la **capacità massima** (in bit e caratteri) per ogni combinazione di `block_size` e `sv_range`, e verificare che il messaggio venga estratto correttamente al limite della capacità.
+#### Test 3 — Analisi della Capacità
 
-**Cosa si aspetta**:
+Calcola il numero massimo di bit e caratteri inseribili per ogni configurazione di blocco. Verifica inoltre che l'estrazione sia corretta quando si riempie la ROI al 100% della sua capacità.
 
-- `block_size=4` offre la massima capacità (più blocchi per unità di area)
-- `sv_range='first'` o `'last'` offrono circa ⅓ dei SV per blocco
-- `sv_range='mid'` offre circa ⅓ dei SV per blocco
+#### Test 4, 5, 6 — Robustezza (Rumore, Blur, JPEG)
 
-**Output CSV**: `results_capacity.csv`
+Sono i "stress test" del sistema. Applicano distorsioni all'immagine stego prima dell'estrazione:
 
----
+- **Rumore Gaussiano**: Varie intensità di deviazione standard ($\sigma$).
+- **Blur Gaussiano**: Diversi raggi di sfocatura.
+- **Compressione JPEG**: Diversi fattori di qualità (da 100 a 30).
+  Misura il **BER (Bit Error Rate)** per quantificare quanti bit vengono persi a causa del degrado.
 
-### Test 4 — Robustezza al Rumore Gaussiano
+#### Test 7 — Confronto Visivo SV Range
 
-**Obiettivo**: Misurare la **resistenza del messaggio** quando si aggiunge rumore all'immagine stego.
+Genera immagini di differenza amplificata (10×) per mostrare graficamente _dove_ l'algoritmo va a modificare i pixel a seconda che si scelgano i valori singolari iniziali, centrali o finali.
 
-| Parametro | Valori testati                   |
-| --------- | -------------------------------- |
-| Noise σ   | 0, 1, 2, 3, 5, 8, 10, 15, 20, 30 |
-| Delta     | 10, 15, 25 (per confronto)       |
+#### Test 8 — Scalabilità Messaggio
 
-**Procedura**:
+Verifica come variano le metriche all'aumentare del carico (da 1 carattere fino al limite massimo della ROI).
 
-1. Embedding con parametri fissi (block_size=8, sv_range=mid)
-2. Aggiunta di rumore gaussiano alla stego-image
-3. Tentativo di estrazione dalla stego-image rumorosa
-4. Misurazione BER e correttezza
+#### Test 9 — ROI Multi-dimensione
 
-**Cosa si aspetta**: Delta più grandi resistono meglio al rumore.  
-**Output CSV**: `results_noise.csv`
+Valuta l'inserimento dello stesso messaggio in ROI di diverse dimensioni (100%, 75%, 50%, 25% dell'immagine) e verifica il corretto utilizzo della Strategia B (sfondo).
 
----
-
-### Test 5 — Robustezza al Blur Gaussiano
-
-**Obiettivo**: Misurare la resistenza del messaggio al **blur** (sfocatura).
-
-| Parametro   | Valori testati |
-| ----------- | -------------- |
-| Blur radius | 0, 1, 2, 3, 5  |
-| Delta       | 10, 15, 25     |
-
-**Procedura**: Simile al Test 4, ma con blur invece di rumore.  
-**Cosa si aspetta**: Il blur è particolarmente distruttivo per i dettagli ad alta frequenza (ultimi SV).  
-**Output CSV**: `results_blur.csv`
-
----
-
-### Test 6 — Robustezza alla Compressione JPEG
-
-**Obiettivo**: Verificare se il messaggio sopravvive alla **compressione lossy JPEG**.
-
-| Parametro    | Valori testati              |
-| ------------ | --------------------------- |
-| JPEG quality | 100, 95, 90, 80, 70, 50, 30 |
-| Delta        | 10, 15, 25                  |
-
-**Procedura**:
-
-1. Embedding nella stego-image (PNG, lossless)
-2. Compressione in JPEG e ricaricamento
-3. Tentativo di estrazione dalla versione JPEG
-4. Misurazione BER e correttezza
-
-**Cosa si aspetta**: La compressione JPEG è il test più aggressivo. Solo delta molto alti potrebbero resistere a qualità basse.  
-**Output CSV**: `results_jpeg.csv`
-
----
-
-### Test 7 — Impatto Visivo dei SV Range
-
-**Obiettivo**: **Confronto visivo** tra le tre strategie di selezione dei valori singolari.
-
-Per ogni `sv_range` (first, mid, last), con block_size=8 e delta=15:
-
-- Salva la stego-image
-- Genera una **mappa delle differenze** amplificata (10×) per evidenziare le alterazioni
-
-**Output**:
-| File | Descrizione |
-|-------------------------|---------------------------------------|
-| `stego_first.png` | Stego-image con SV first |
-| `stego_mid.png` | Stego-image con SV mid |
-| `stego_last.png` | Stego-image con SV last |
-| `diff_first.png` | Differenza amplificata 10× (first) |
-| `diff_mid.png` | Differenza amplificata 10× (mid) |
-| `diff_last.png` | Differenza amplificata 10× (last) |
-
-**Metriche**: PSNR, SSIM, differenza massima e media.  
-**Output CSV**: `results_sv_visual.csv`
-
----
-
-### Test 8 — Scalabilità con Lunghezza del Messaggio
-
-**Obiettivo**: Misurare come le performance **scalano** al crescere della lunghezza del messaggio.
-
-| Parametro     | Valori testati                       |
-| ------------- | ------------------------------------ |
-| Lunghezza msg | 1, 5, 10, 20, 50, 100, max chars     |
-| Parametri     | block_size=8, sv_range=mid, delta=15 |
-
-**Cosa si aspetta**: Al crescere del messaggio, il PSNR decresce gradualmente e il tempo di esecuzione resta quasi costante (l'SVD si calcola comunque su tutti i blocchi).  
-**Output CSV**: `results_scaling.csv`
-
----
-
-## Metriche
-
-| Metrica         | Descrizione                 | Range     | Ideale                   |
-| --------------- | --------------------------- | --------- | ------------------------ |
-| **PSNR**        | Peak Signal-to-Noise Ratio  | 0 – ∞ dB  | > 40 dB (impercettibile) |
-| **SSIM**        | Structural Similarity Index | 0.0 – 1.0 | > 0.99                   |
-| **BER**         | Bit Error Rate              | 0.0 – 1.0 | 0.0 (nessun errore)      |
-| **Correttezza** | Match esatto del messaggio  | ✅/❌     | ✅                       |
-
-### Interpretazione PSNR
-
-| PSNR (dB) | Qualità                                  |
-| --------- | ---------------------------------------- |
-| > 50      | Alterazioni invisibili, qualità perfetta |
-| 40 – 50   | Ottimo, impercettibile all'occhio        |
-| 30 – 40   | Buono, lievi artefatti possibili         |
-| 20 – 30   | Mediocre, alterazioni visibili           |
-| < 20      | Scarso, alterazioni evidenti             |
-
----
-
-## Output
+### Output dei Test
 
 Tutti i risultati vengono salvati nella directory `test_output/` (configurabile con `--output`):
 
 | File                       | Contenuto                                           |
-| -------------------------- | --------------------------------------------------- |
+| :------------------------- | :-------------------------------------------------- |
 | `results_sweep.csv`        | Risultati di tutte le 162 combinazioni di parametri |
-| `results_delta.csv`        | Impatto del delta (12 valori)                       |
-| `results_capacity.csv`     | Capacità per ogni configurazione (9 combinazioni)   |
-| `results_noise.csv`        | Robustezza al rumore (30 test)                      |
-| `results_blur.csv`         | Robustezza al blur (15 test)                        |
-| `results_jpeg.csv`         | Robustezza JPEG (21 test)                           |
-| `results_sv_visual.csv`    | Impatto visivo dei 3 SV range                       |
-| `results_scaling.csv`      | Scalabilità con lunghezza messaggio                 |
-| `stego_*.png`              | Stego-image per confronto visivo                    |
-| `diff_*.png`               | Mappe di differenza amplificate                     |
+| `results_delta.csv`        | Impatto del delta sulla qualità (Test 2)            |
+| `results_capacity.csv`     | Analisi capacità massima (Test 3)                   |
+| `results_noise.csv`        | Robustezza al rumore (Test 4)                       |
+| `results_blur.csv`         | Robustezza al blur (Test 5)                         |
+| `results_jpeg.csv`         | Robustezza alla compressione JPEG (Test 6)          |
+| `results_sv_visual.csv`    | Metriche del confronto visivo (Test 7)              |
+| `results_scaling.csv`      | Scalabilità con lunghezza messaggio (Test 8)        |
+| `stego_*.png`              | Immagini stego per confronto visivo                 |
+| `diff_*.png`               | Mappe di differenza amplificate 10×                 |
 | `test_image_synthetic.png` | Immagine sintetica usata (se non fornita)           |
+
+### Metriche di Valutazione
+
+| Metrica         | Descrizione                                       | Range     | Target  |
+| :-------------- | :------------------------------------------------ | :-------- | :------ |
+| **PSNR**        | Peak Signal-to-Noise Ratio (fedeltà cromatica)    | 0 – ∞ dB  | > 40 dB |
+| **SSIM**        | Structural Similarity Index (fedeltà strutturale) | 0.0 – 1.0 | > 0.99  |
+| **BER**         | Bit Error Rate (percentuale bit errati)           | 0.0 – 1.0 | 0.0     |
+| **Correttezza** | Match esatto del messaggio stringa                | ✅/❌     | ✅      |
+
+---
+
+## 3. Confronto tra Quick Test e Performance Test
+
+| Caratteristica           | `quick_test.py`                 | `test_performance.py`                     |
+| :----------------------- | :------------------------------ | :---------------------------------------- |
+| **Obiettivo Principale** | Correttezza del codice          | Analisi scientifica e robustezza          |
+| **Dati in Input**        | Matrici random molto piccole    | Immagini reali o sintetiche strutturate   |
+| **Velocità**             | Ultra-rapido (< 2 secondi)      | Lento (dipende dal numero di test)        |
+| **Output**               | Log test Passati/Falliti        | Tabelle, file CSV, immagini di differenza |
+| **Uso in Sviluppo**      | Da usare durante il coding (CI) | Da usare per calibrare i parametri        |
+| **Metriche**             | Solo base (Match, Errore SVD)   | Avanzate (SSIM, BER, curve di robustezza) |
+| **Ambito**               | Unit Testing                    | Benchmarking / Stress Testing             |
+
+In sintesi: usa `quick_test.py` per essere sicuro di non aver rotto nulla; usa `test_performance.py` per capire quanto è "buona" una specifica configurazione di parametri.

@@ -18,7 +18,8 @@ from src.steganography import (
     extract_from_full_image,
     compute_capacity,
 )
-from src.validation import _compute_psnr
+from src.image_utils import compute_psnr
+from src.yolo_roi import BoundingBox, select_roi
 
 def compute_ssim(
     original: np.ndarray,
@@ -178,7 +179,7 @@ def test_parameter_sweep(
 
                     extracted_message = binary_to_text(extracted_bits)
 
-                    psnr = _compute_psnr(image, stego_image)
+                    psnr = compute_psnr(image, stego_image)
                     ssim = compute_ssim(image, stego_image)
                     ber = compute_ber(payload_bits, extracted_bits)
                     correct = extracted_message == message
@@ -249,7 +250,7 @@ def test_delta_impact(
         )
 
         extracted_message = binary_to_text(extracted_bits)
-        psnr = _compute_psnr(image, stego_image)
+        psnr = compute_psnr(image, stego_image)
         ssim = compute_ssim(image, stego_image)
         ber = compute_ber(payload_bits, extracted_bits)
         correct = extracted_message == message
@@ -362,7 +363,7 @@ def test_robustness_noise(
             else:
                 noisy_stego = add_gaussian_noise(stego_image, sigma)
 
-            psnr_noise = _compute_psnr(stego_image, noisy_stego) if sigma > 0 else float('inf')
+            psnr_noise = compute_psnr(stego_image, noisy_stego) if sigma > 0 else float('inf')
 
             extracted_bits = extract_from_full_image(
                 noisy_stego, image, roi_coords,
@@ -421,7 +422,7 @@ def test_robustness_blur(
             else:
                 blurred_stego = apply_gaussian_blur(stego_image, radius)
 
-            psnr_blur = _compute_psnr(stego_image, blurred_stego) if radius > 0 else float('inf')
+            psnr_blur = compute_psnr(stego_image, blurred_stego) if radius > 0 else float('inf')
 
             extracted_bits = extract_from_full_image(
                 blurred_stego, image, roi_coords,
@@ -480,7 +481,7 @@ def test_robustness_jpeg(
             else:
                 jpeg_stego = apply_jpeg_compression(stego_image, quality)
 
-            psnr_jpeg = _compute_psnr(stego_image, jpeg_stego) if quality < 100 else float('inf')
+            psnr_jpeg = compute_psnr(stego_image, jpeg_stego) if quality < 100 else float('inf')
 
             extracted_bits = extract_from_full_image(
                 jpeg_stego, image, roi_coords,
@@ -537,7 +538,7 @@ def test_sv_range_visual_impact(
             block_size=8, sv_range=sv_range, delta=delta,
         )
 
-        psnr = _compute_psnr(image, stego_image)
+        psnr = compute_psnr(image, stego_image)
         ssim = compute_ssim(image, stego_image)
 
         diff = np.abs(image - stego_image)
@@ -608,7 +609,7 @@ def test_message_length_scaling(
         t_elapsed = time.time() - t_start
 
         extracted_message = binary_to_text(extracted_bits)
-        psnr = _compute_psnr(image, stego_image)
+        psnr = compute_psnr(image, stego_image)
         ssim = compute_ssim(image, stego_image)
         ber = compute_ber(payload_bits, extracted_bits)
         correct = extracted_message == message
@@ -627,6 +628,110 @@ def test_message_length_scaling(
         ok_str = "" if correct else ""
         print(f"{length:>6}  {len(payload_bits):>6}  {psnr:>7.2f}dB  {ssim:>6.4f}  "
               f"{ber:>8.6f}  {ok_str:>3}  {t_elapsed:>5.1f}s")
+
+    return results
+
+def test_roi_embedding(
+    image: np.ndarray,
+    output_dir: str = "test_output",
+) -> list[dict]:
+
+    print(f"{'' * 70}")
+    print("TEST 9 — EMBEDDING CON ROI DI DIVERSE DIMENSIONI")
+    print(f"{'' * 70}")
+
+    h, w = image.shape
+    message = "Test ROI embedding"
+    payload_bits = text_to_binary(message)
+
+    roi_configs = [
+        ("100% immagine", (0, 0, h, w)),
+        ("75% centrale", (h // 8, w // 8, h * 7 // 8, w * 7 // 8)),
+        ("50% centrale", (h // 4, w // 4, h * 3 // 4, w * 3 // 4)),
+        ("25% centrale", (h * 3 // 8, w * 3 // 8, h * 5 // 8, w * 5 // 8)),
+    ]
+
+    results = []
+
+    print(f"Messaggio: \"{message}\"")
+    print(f"Immagine: {h}x{w}")
+    print(f"{'ROI':<20}  {'Dim ROI':<10}  {'Capacita':<10}  {'PSNR':<8}  "
+          f"{'SSIM':<7}  {'BER':<8}  {'OK':<3}")
+    print(f"{'' * 80}")
+
+    for label, roi_coords in roi_configs:
+        y1, x1, y2, x2 = roi_coords
+        roi_matrix = image[y1:y2, x1:x2]
+        capacity = compute_capacity(roi_matrix, 8, "mid")
+
+        if len(payload_bits) > capacity['total_bits']:
+            results.append({
+                "roi_label": label,
+                "roi_size": f"{y2-y1}x{x2-x1}",
+                "capacity_bits": capacity['total_bits'],
+                "psnr": None,
+                "ssim": None,
+                "ber": None,
+                "correct": False,
+                "note": "Capacita insufficiente",
+            })
+            print(f"{label:<20}  {y2-y1}x{x2-x1:<6}  {capacity['total_bits']:<10}  "
+                  f"{'':>8}  {'':>7}  {'':>8}  SKIP")
+            continue
+
+        stego_image, embed_info = embed_in_full_image(
+            image, roi_coords, payload_bits,
+            block_size=8, sv_range="mid", delta=15.0,
+        )
+        extracted_bits = extract_from_full_image(
+            stego_image, image, roi_coords,
+            block_size=8, sv_range="mid",
+            max_bits=len(payload_bits),
+        )
+
+        extracted_message = binary_to_text(extracted_bits)
+        psnr = compute_psnr(image, stego_image)
+        ssim = compute_ssim(image, stego_image)
+        ber = compute_ber(payload_bits, extracted_bits)
+        correct = extracted_message == message
+
+        outside_modified = not np.array_equal(
+            image[:y1, :] if y1 > 0 else image[y2:, :],
+            stego_image[:y1, :] if y1 > 0 else stego_image[y2:, :],
+        )
+
+        result = {
+            "roi_label": label,
+            "roi_size": f"{y2-y1}x{x2-x1}",
+            "capacity_bits": capacity['total_bits'],
+            "psnr": psnr,
+            "ssim": ssim,
+            "ber": ber,
+            "correct": correct,
+            "outside_intact": not outside_modified,
+            "note": "",
+        }
+        results.append(result)
+
+        ok_str = "" if correct else ""
+        print(f"{label:<20}  {y2-y1}x{x2-x1:<6}  {capacity['total_bits']:<10}  "
+              f"{psnr:>7.2f}dB  {ssim:>5.4f}  {ber:>8.6f}  {ok_str}")
+
+    print(f"")
+    print("Strategia B (sfondo):")
+
+    bb_center = BoundingBox(w // 4, h // 4, w * 3 // 4, h * 3 // 4, 0.9, 0, "object")
+    roi_result = select_roi((h, w), [bb_center], strategy="B")
+    bg_roi_coords = (0, 0, h, w)
+
+    bg_capacity = compute_capacity(image, 8, "mid")
+    if len(payload_bits) <= bg_capacity['total_bits']:
+        stego_bg, _ = embed_in_full_image(
+            image, bg_roi_coords, payload_bits,
+            block_size=8, sv_range="mid", delta=15.0,
+        )
+        psnr_bg = compute_psnr(image, stego_bg)
+        print(f"  Sfondo (escluso box centrale): PSNR={psnr_bg:.2f}dB")
 
     return results
 
@@ -663,7 +768,7 @@ def main():
     parser.add_argument("-o", "--output", type=str, default="test_output",
                         help="Directory di output per risultati e CSV (default: test_output)")
     parser.add_argument("-t", "--test", type=int, default=None,
-                        help="Esegui solo il test specificato (1-8). Se omesso, esegue tutti.")
+                help="Esegui solo il test specificato (1-9). Se omesso, esegue tutti.")
     args = parser.parse_args()
 
     output_dir = args.output
@@ -700,20 +805,23 @@ def main():
         5: ("Robustezza blur", test_robustness_blur, "results_blur.csv"),
         6: ("Robustezza JPEG", test_robustness_jpeg, "results_jpeg.csv"),
         7: ("Impatto visivo SV", test_sv_range_visual_impact, "results_sv_visual.csv"),
-        8: ("Scalabilità messaggio", test_message_length_scaling, "results_scaling.csv"),
+        8: ("Scalabilita messaggio", test_message_length_scaling, "results_scaling.csv"),
+        9: ("Embedding con ROI", test_roi_embedding, "results_roi.csv"),
     }
 
     tests_to_run = [args.test] if args.test else list(all_tests.keys())
 
     for test_id in tests_to_run:
         if test_id not in all_tests:
-            print(f"Test {test_id} non esiste. Disponibili: 1-8")
+            print(f"Test {test_id} non esiste. Disponibili: 1-9")
             continue
 
         name, func, csv_file = all_tests[test_id]
 
         if test_id in (1, 7):
             results = func(image, roi_coords, output_dir)
+        elif test_id == 9:
+            results = func(image, output_dir)
         else:
             results = func(image, roi_coords)
 

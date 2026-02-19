@@ -27,15 +27,7 @@ def save_image(matrix: np.ndarray, output_path: str) -> None:
     img = matrix_to_image(matrix)
     img.save(output_path)
 
-def apply_mean_centering(X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
-    means = np.mean(X, axis=0)
-    X_centered = X - means
-    return X_centered, means
-
-def remove_mean_centering(X_centered: np.ndarray, means: np.ndarray) -> np.ndarray:
-
-    return X_centered + means
 
 def split_into_blocks(matrix: np.ndarray, block_size: int = 8) -> tuple[list[np.ndarray], list[tuple[int, int]], tuple[int, int]]:
 
@@ -71,3 +63,11 @@ def merge_blocks(blocks: list[np.ndarray], positions: list[tuple[int, int]], ori
         result[i:i + block_size, j:j + block_size] = block
 
     return result[:h, :w]
+
+def compute_psnr(original: np.ndarray, reconstructed: np.ndarray) -> float:
+
+    mse = np.mean((original - reconstructed) ** 2)
+    if mse == 0:
+        return float('inf')
+    max_pixel = 255.0
+    return 10 * np.log10((max_pixel ** 2) / mse)
