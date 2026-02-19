@@ -35,7 +35,7 @@ Integrazione del modello di Deep Learning per rendere la steganografia contestua
 
 Fusione dei dati all'interno dei valori singolari.
 
-1. **Preparazione del payload**: Convertire il messaggio segreto (testo o immagine) in una sequenza binaria o numerica.
+1. **Preparazione del payload**: Convertire il messaggio segreto in una sequenza binaria usando codifica ASCII a 7 bit (128 caratteri), riducendo la probabilità di errore rispetto a UTF-8.
 2. **Suddivisione in blocchi**: Dividere la ROI scelta in blocchi più piccoli (es. 8x8 o 16x16 pixel) per ottimizzare la velocità dell'SVD custom.
 3. **Modifica di Sigma**: Per ogni blocco, applicare la SVD custom per ottenere U, Sigma, V^T. Alterare i valori di Sigma aggiungendo il payload.
 
@@ -51,8 +51,8 @@ Il processo inverso per recuperare i dati.
 
 1. **Rilevamento YOLO**: L'immagine ricevuta viene ripassata sotto YOLO per ritrovare le coordinate esatte della ROI utilizzata in fase di embedding.
 2. **Decomposizione SVD**: Applicare nuovamente l'SVD ai blocchi della ROI estratta per ottenere la nuova matrice Sigma_modificata.
-3. **Estrazione Blind**:
-   - L'estrazione non richiede l'immagine originale (i dati vengono inseriti in modo matematicamente deducibile, ad es. rendendo pari/dispari determinati valori singolari)
+3. **Estrazione Informed**:
+   - L'estrazione richiede l'immagine originale come riferimento. I bit vengono recuperati confrontando i valori singolari della stego-image con quelli dell'originale, rendendo la decodifica molto più affidabile rispetto all'estrazione blind.
 
 ---
 

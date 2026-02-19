@@ -1,28 +1,3 @@
-"""
-Main entry point — SVD Image Steganography.
-
-Fase 1: Implementazione Matematica della SVD "from scratch".
-Fase 2: Selezione della ROI con YOLOv8.
-Fase 3: Embedding del messaggio nei valori singolari.
-Fase 4: Estrazione del messaggio dalla stego-image.
-
-Questo script:
-1. Esegue la suite di validazione della SVD custom vs numpy
-2. Testa il mean centering su un'immagine (se fornita)
-3. Dimostra la compressione/ricostruzione di un'immagine con la SVD custom
-4. (Fase 2) Rileva oggetti con YOLOv8 e seleziona la ROI per la steganografia
-5. (Fase 3) Nasconde un messaggio nell'immagine tramite SVD + QIM
-6. (Fase 4) Estrae il messaggio nascosto dalla stego-image (blind extraction)
-
-Uso:
-    python main.py                              # Solo validazione matrici
-    python main.py --image <percorso_immagine>  # Validazione + test su immagine
-    python main.py --image img.png --yolo       # Fase 2: Rilevamento YOLO + ROI
-    python main.py --image foto.png --embed --message "Ciao!"  # Fase 3: Embedding
-    python main.py --image stego.png --extract  # Fase 4: Estrazione
-"""
-
-import argparse
 import os
 import sys
 import numpy as np
@@ -39,57 +14,57 @@ from src.image_utils import (
 )
 from src.validation import run_all_tests, test_mean_centering_impact, _compute_psnr
 
+IMAGE_PATH = "percorso/alla/tua/immagine.png"
 
-# ═══════════════════════════════════════════════════════════════
-#  FASE 1 — Demo SVD su immagine
-# ═══════════════════════════════════════════════════════════════
+MESSAGE = "Messaggio segreto"
+
+OUTPUT_DIR = "output"
+
+YOLO_MODEL = "yolov8n.pt"
+YOLO_CONFIDENCE = 0.25
+STRATEGY = "C"
+BOX_INDEX = None
+
+BLOCK_SIZE = 8
+SV_RANGE = "mid"
+DELTA = 15.0
+
+RUN_VALIDATION = True
+RUN_MEAN_CENTERING_TEST = False
+RUN_SVD_DEMO = True
+RUN_YOLO = True
+RUN_EMBED = True
+RUN_EXTRACT = True
 
 def demo_image_svd(image_path: str, output_dir: str = "output") -> None:
-    """
-    Dimostra la SVD custom su un'immagine reale:
-    - Carica l'immagine
-    - Applica SVD (con e senza mean centering)
-    - Ricostruisce con diversi valori di k
-    - Salva le immagini ricostruite
 
-    Parametri
-    ---------
-    image_path : str
-        Percorso dell'immagine di input.
-    output_dir : str
-        Cartella dove salvare i risultati.
-    """
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"\n{'═' * 60}")
-    print(f"  DEMO SVD SU IMMAGINE")
-    print(f"{'═' * 60}")
-    print(f"\n  📷 Immagine: {image_path}")
+    print(f"{'' * 60}")
+    print("DEMO SVD SU IMMAGINE")
+    print(f"{'' * 60}")
+    print(f"Immagine: {image_path}")
 
-    # Carica immagine
     X = load_image_as_matrix(image_path, grayscale=True)
     h, w = X.shape
-    print(f"  📐 Dimensioni: {h}×{w}")
-    print(f"  🔢 Rango massimo: {min(h, w)}")
+    print(f"Dimensioni: {h}×{w}")
+    print(f"Rango massimo: {min(h, w)}")
 
-    # ─── SVD sull'intera immagine (senza mean centering) ───
-    print(f"\n  ⏳ Calcolo SVD custom (potrebbe richiedere un po' per immagini grandi)...")
+    print("Computing SVD...")
     U, sigma, Vt = svd_compact(X)
-    print(f"  ✅ SVD calcolata! Rango numerico: {len(sigma)}")
+    print(f"SVD done. Rank: {len(sigma)}")
 
-    # Confronta con numpy
     _, sigma_np, _ = np.linalg.svd(X, full_matrices=False)
     k_test = min(10, len(sigma))
     max_sv_error = np.max(np.abs(sigma[:k_test] - sigma_np[:k_test]))
-    print(f"  📊 Max errore sui primi {k_test} valori singolari vs numpy: {max_sv_error:.2e}")
+    print(f"Max error: {k_test} vs numpy: {max_sv_error:.2e}")
 
-    # Ricostruzione con diversi valori di k
     k_values = [1, 5, 10, 20, 50, 100]
     k_values = [k for k in k_values if k <= len(sigma)]
 
-    print(f"\n  Ricostruzioni con diversi valori di k:")
-    print(f"  {'k':>5} | {'PSNR':>10} | {'File'}")
-    print(f"  {'─' * 50}")
+    print("Ricostruzioni con diversi valori di k:")
+    print(f"{'k':>5}  {'PSNR':>10}  {'File'}")
+    print(f"{'' * 50}")
 
     for k in k_values:
         X_recon = reconstruct(U, sigma, Vt, k)
@@ -97,15 +72,13 @@ def demo_image_svd(image_path: str, output_dir: str = "output") -> None:
         filename = f"reconstructed_k{k}.png"
         filepath = os.path.join(output_dir, filename)
         save_image(X_recon, filepath)
-        print(f"  {k:>5} | {psnr:>8.2f} dB | {filepath}")
+        print(f"{k:>5}  {psnr:>8.2f} dB  {filepath}")
 
-    # ─── SVD per blocchi (8×8): come sarà usata nella steganografia ───
-    print(f"\n  🧩 Demo SVD per blocchi (8×8):")
+    print("Demo SVD per blocchi (8×8):")
     block_size = 8
     blocks, positions, original_shape = split_into_blocks(X, block_size)
-    print(f"     Numero blocchi: {len(blocks)}")
+    print(f"Numero blocchi: {len(blocks)}")
 
-    # Ricostruisci ogni blocco usando SVD compact
     reconstructed_blocks = []
     for block in blocks:
         U_b, s_b, Vt_b = svd_compact(block)
@@ -116,15 +89,10 @@ def demo_image_svd(image_path: str, output_dir: str = "output") -> None:
     psnr_blocks = _compute_psnr(X, X_block_recon)
     block_filepath = os.path.join(output_dir, "reconstructed_blocks_full.png")
     save_image(X_block_recon, block_filepath)
-    print(f"     PSNR ricostruzione blocchi (full rank): {psnr_blocks:.2f} dB")
-    print(f"     Salvato: {block_filepath}")
+    print("PSNR ricostruzione blocchi (full rank): {psnr_blocks:.2f} dB")
+    print(f"Salvato: {block_filepath}")
 
-    print(f"\n  🎉 Demo completata! Output salvati in '{output_dir}/'")
-
-
-# ═══════════════════════════════════════════════════════════════
-#  FASE 2 — Rilevamento YOLO e selezione ROI
-# ═══════════════════════════════════════════════════════════════
+    print("Done. Saved in '{output_dir}/'")
 
 def demo_yolo_roi(
     image_path: str,
@@ -134,25 +102,7 @@ def demo_yolo_roi(
     confidence: float = 0.25,
     output_dir: str = "output",
 ) -> None:
-    """
-    Fase 2 — Rileva gli oggetti nell'immagine con YOLOv8 e seleziona la ROI
-    per la steganografia.
 
-    Parametri
-    ---------
-    image_path : str
-        Percorso dell'immagine di cover.
-    strategy : str
-        Strategia di selezione ROI: 'A', 'B', o 'C'.
-    box_index : int | None
-        Indice del bounding box da usare (solo per strategia A).
-    model_name : str
-        Nome/percorso del modello YOLOv8 (default: yolov8n.pt).
-    confidence : float
-        Soglia di confidenza per le detection YOLO.
-    output_dir : str
-        Cartella di output.
-    """
     from src.yolo_roi import (
         load_yolo_model,
         detect_objects,
@@ -165,64 +115,53 @@ def demo_yolo_roi(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"\n{'═' * 60}")
-    print(f"  FASE 2 — RILEVAMENTO YOLO + SELEZIONE ROI")
-    print(f"{'═' * 60}")
-    print(f"\n  📷 Immagine: {image_path}")
+    print(f"{'' * 60}")
+    print("FASE 2 — RILEVAMENTO YOLO + SELEZIONE ROI")
+    print(f"{'' * 60}")
+    print(f"Immagine: {image_path}")
 
-    # 1. Carica il modello YOLO
     model = load_yolo_model(model_name)
 
-    # 2. Inferenza: rileva gli oggetti
-    print(f"\n  🔍 Esecuzione inferenza (soglia confidenza: {confidence:.0%})...")
+    print("Inference (conf: {confidence:.0%})...")
     bounding_boxes = detect_objects(model, image_path, confidence_threshold=confidence)
 
-    # 3. Carica l'immagine come matrice per ottenere le dimensioni
     img_matrix = load_image_as_matrix(image_path, grayscale=True)
     image_shape = img_matrix.shape[:2]
 
-    # 4. Selezione della ROI
     roi_result = select_roi(image_shape, bounding_boxes, strategy=strategy, box_index=box_index)
 
-    # 5. Report console
     print_detection_report(bounding_boxes, roi_result, image_shape)
 
-    # 6. Salva immagine annotata con bounding box
     annotated_img = draw_detections(image_path, bounding_boxes, roi_result)
     annotated_path = os.path.join(output_dir, "yolo_detections.png")
     annotated_img.save(annotated_path)
-    print(f"\n  💾 Immagine con detection salvata: {annotated_path}")
+    print(f"Detection saved: {annotated_path}")
 
-    # 7. Estrai e salva la ROI
     roi_region = extract_roi_region(img_matrix, roi_result)
     roi_path = os.path.join(output_dir, "roi_extracted.png")
     save_image(roi_region, roi_path)
-    print(f"  💾 ROI estratta salvata: {roi_path}")
+    print(f"ROI saved: {roi_path}")
 
-    # 8. Salva la maschera ROI
     mask_image = (roi_result.mask.astype(np.uint8)) * 255
     mask_path = os.path.join(output_dir, "roi_mask.png")
     save_image(mask_image.astype(np.float64), mask_path)
-    print(f"  💾 Maschera ROI salvata: {mask_path}")
+    print(f"Mask saved: {mask_path}")
 
-    # 9. Demo SVD sulla ROI (solo se strategia A o C con un box selezionato)
     if roi_result.selected_box is not None:
         bb = roi_result.selected_box
         roi_matrix = img_matrix[bb.y1:bb.y2, bb.x1:bb.x2].copy()
         h_roi, w_roi = roi_matrix.shape
 
-        print(f"\n  🧮 Demo SVD sulla ROI ({h_roi}×{w_roi}):")
+        print("Demo SVD sulla ROI ({h_roi}×{w_roi}):")
 
-        # SVD compatta sulla ROI
         U_roi, sigma_roi, Vt_roi = svd_compact(roi_matrix)
-        print(f"     Rango numerico ROI: {len(sigma_roi)}")
+        print(f"Rango numerico ROI: {len(sigma_roi)}")
 
-        # Ricostruzione a diversi livelli di k
         k_values = [1, 5, 10, 20]
         k_values = [k for k in k_values if k <= len(sigma_roi)]
 
-        print(f"     {'k':>5} | {'PSNR':>10} | {'File'}")
-        print(f"     {'─' * 50}")
+        print(f"{'k':>5}  {'PSNR':>10}  {'File'}")
+        print(f"{'' * 50}")
 
         for k in k_values:
             roi_recon = reconstruct(U_roi, sigma_roi, Vt_roi, k)
@@ -230,14 +169,9 @@ def demo_yolo_roi(
             filename = f"roi_reconstructed_k{k}.png"
             filepath = os.path.join(output_dir, filename)
             save_image(roi_recon, filepath)
-            print(f"     {k:>5} | {psnr:>8.2f} dB | {filepath}")
+            print(f"{k:>5}  {psnr:>8.2f} dB  {filepath}")
 
-    print(f"\n  🎉 Fase 2 completata! Output salvati in '{output_dir}/'")
-
-
-# ═══════════════════════════════════════════════════════════════
-#  FASE 3 — Embedding del Messaggio
-# ═══════════════════════════════════════════════════════════════
+    print("Fase 2 completata! Output salvati in '{output_dir}/'")
 
 def demo_embed(
     image_path: str,
@@ -251,38 +185,7 @@ def demo_embed(
     delta: float = 15.0,
     output_dir: str = "output",
 ) -> None:
-    """
-    Fase 3 — Embedding completo: YOLO ROI + SVD steganography.
 
-    1. Rileva gli oggetti con YOLO e seleziona la ROI
-    2. Converte il messaggio in binario
-    3. Incorpora il payload nei valori singolari della ROI
-    4. Ricostruisce la stego-image
-    5. Verifica estraendo il messaggio dalla stego-image
-
-    Parametri
-    ---------
-    image_path : str
-        Percorso dell'immagine di cover.
-    message : str
-        Il messaggio segreto da nascondere.
-    strategy : str
-        Strategia di selezione ROI: 'A', 'B', 'C'.
-    box_index : int | None
-        Indice del bounding box (solo strategia A).
-    model_name : str
-        Modello YOLOv8.
-    confidence : float
-        Soglia di confidenza YOLO.
-    block_size : int
-        Dimensione dei blocchi per la SVD (default: 8).
-    sv_range : str
-        Quali SV modificare: 'first', 'mid', 'last'.
-    delta : float
-        Passo di quantizzazione QIM.
-    output_dir : str
-        Cartella di output.
-    """
     from src.yolo_roi import (
         load_yolo_model,
         detect_objects,
@@ -303,15 +206,14 @@ def demo_embed(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"\n{'═' * 60}")
-    print(f"  FASE 3 — EMBEDDING DEL MESSAGGIO")
-    print(f"{'═' * 60}")
-    print(f"\n  📷 Immagine di cover: {image_path}")
-    print(f"  💬 Messaggio: \"{message}\"")
-    print(f"  📏 Lunghezza messaggio: {len(message)} caratteri ({len(message) * 8 + 8} bit con terminatore)")
+    print(f"{'' * 60}")
+    print("FASE 3 — EMBEDDING DEL MESSAGGIO")
+    print(f"{'' * 60}")
+    print(f"Immagine di cover: {image_path}")
+    print("Messaggio: \"{message}\"")
+    print("Lunghezza messaggio: {len(message)} caratteri ({len(message) * 7 + 7} bit con terminatore)")
 
-    # ─── Step 1: YOLO Detection + ROI ───
-    print(f"\n  ── Step 1: Rilevamento YOLO + selezione ROI ──")
+    print("Step 1: YOLO ROI ")
     model = load_yolo_model(model_name)
     bounding_boxes = detect_objects(model, image_path, confidence_threshold=confidence)
 
@@ -321,44 +223,41 @@ def demo_embed(
     roi_result = select_roi(image_shape, bounding_boxes, strategy=strategy, box_index=box_index)
     print_detection_report(bounding_boxes, roi_result, image_shape)
 
-    # Determina le coordinate della ROI
     if roi_result.selected_box is not None:
         bb = roi_result.selected_box
         roi_coords = (bb.y1, bb.x1, bb.y2, bb.x2)
     else:
-        # Strategia B o nessun oggetto rilevato: usa l'intera immagine
+
         roi_coords = (0, 0, image_shape[0], image_shape[1])
 
     y1, x1, y2, x2 = roi_coords
     roi_matrix = img_matrix[y1:y2, x1:x2]
-    print(f"\n  📐 ROI selezionata: ({x1},{y1})→({x2},{y2}) = {y2 - y1}×{x2 - x1} pixel")
+    print("ROI selezionata: ({x1},{y1})→({x2},{y2}) = {y2  y1}×{x2  x1} pixel")
 
-    # ─── Step 2: Verifica capacità ───
-    print(f"\n  ── Step 2: Verifica capacità ──")
+    print("Step 2: Capacity check ")
     capacity = compute_capacity(roi_matrix, block_size, sv_range)
     payload_bits = text_to_binary(message)
 
-    print(f"     Capacità totale:    {capacity['total_bits']} bit ({capacity['max_text_chars']} caratteri max)")
-    print(f"     Payload richiesto:  {len(payload_bits)} bit ({len(message)} caratteri + terminatore)")
+    print("Capacità totale:    {capacity['total_bits']} bit ({capacity['max_text_chars']} caratteri max)")
+    print("Payload richiesto:  {len(payload_bits)} bit ({len(message)} caratteri + terminatore)")
 
     if len(payload_bits) > capacity['total_bits']:
         max_chars = capacity['max_text_chars']
-        print(f"\n  ❌ Errore: il messaggio è troppo lungo!")
-        print(f"     La ROI può contenere al massimo {max_chars} caratteri.")
-        print(f"     Suggerimenti:")
-        print(f"       - Riduci il messaggio a {max_chars} caratteri")
-        print(f"       - Usa blocchi più piccoli (--block-size 4)")
-        print(f"       - Usa sv_range 'first' o 'last' per più bit per blocco")
-        print(f"       - Scegli una ROI più grande (strategia B per sfondo)")
+        print("Errore: il messaggio è troppo lungo!")
+        print("La ROI può contenere al massimo {max_chars} caratteri.")
+        print("Suggerimenti:")
+        print("- Riduci il messaggio a {max_chars} caratteri")
+        print("- Usa blocchi più piccoli (block_size = 4)")
+        print("- Usa sv_range 'first' o 'last' per più bit per blocco")
+        print("- Scegli una ROI più grande (strategia B per sfondo)")
         return
 
-    print(f"     ✅ Capacità sufficiente!")
+    print("Capacità sufficiente!")
 
-    # ─── Step 3: Embedding ───
-    print(f"\n  ── Step 3: Embedding SVD + QIM ──")
-    print(f"     Block size:    {block_size}×{block_size}")
-    print(f"     SV range:      {sv_range}")
-    print(f"     Delta (QIM):   {delta}")
+    print("Step 3: SVD Embedding ")
+    print(f"Block size:    {block_size}×{block_size}")
+    print(f"SV range:      {sv_range}")
+    print(f"Delta:         {delta}")
 
     stego_image, embed_info = embed_in_full_image(
         img_matrix, roi_coords, payload_bits,
@@ -367,59 +266,51 @@ def demo_embed(
 
     print_embed_report(embed_info)
 
-    # ─── Step 4: Salvataggio ───
-    print(f"\n  ── Step 4: Salvataggio stego-image ──")
+    print("Step 4: Salvataggio stegoimage ")
     stego_path = os.path.join(output_dir, "stego_image.png")
     save_image(stego_image, stego_path)
-    print(f"     💾 Stego-image salvata: {stego_path}")
+    print(f"Stego-image salvata: {stego_path}")
 
-    # Salva anche l'immagine annotata con YOLO
     annotated_img = draw_detections(image_path, bounding_boxes, roi_result)
     annotated_path = os.path.join(output_dir, "yolo_detections.png")
     annotated_img.save(annotated_path)
-    print(f"     💾 Immagine con detection: {annotated_path}")
+    print(f"Immagine con detection: {annotated_path}")
 
-    # ─── Step 5: Verifica (estrazione) ───
-    print(f"\n  ── Step 5: Verifica — Estrazione del messaggio ──")
+    print("Step 5: Extraction verification ")
     extracted_bits = extract_from_full_image(
-        stego_image, roi_coords,
-        block_size=block_size, sv_range=sv_range, delta=delta,
+        stego_image, img_matrix, roi_coords,
+        block_size=block_size, sv_range=sv_range,
         max_bits=len(payload_bits),
     )
     extracted_message = binary_to_text(extracted_bits)
 
-    print(f"     Messaggio originale: \"{message}\"")
-    print(f"     Messaggio estratto:  \"{extracted_message}\"")
+    print("Messaggio originale: \"{message}\"")
+    print("Messaggio estratto:  \"{extracted_message}\"")
 
     if extracted_message == message:
-        print(f"\n  ✅ VERIFICA SUPERATA! Il messaggio è stato estratto correttamente.")
+        print("Verification passed.")
     else:
-        print(f"\n  ⚠️  VERIFICA FALLITA — il messaggio estratto non corrisponde.")
-        # Confronto dettagliato
+        print("VERIFICA FALLITA — il messaggio estratto non corrisponde.")
+
         matching_bits = np.sum(payload_bits[:len(extracted_bits)] == extracted_bits[:len(payload_bits)])
         total_compare = min(len(payload_bits), len(extracted_bits))
-        print(f"     Bit corrispondenti: {matching_bits}/{total_compare} ({matching_bits / total_compare * 100:.1f}%)")
+        print("Bit corrispondenti: {matching_bits}/{total_compare} ({matching_bits / total_compare * 100:.1f}%)")
 
-    # ─── Step 6: Metriche visive (anteprima Fase 5) ───
     psnr = _compute_psnr(img_matrix, stego_image)
-    print(f"\n  📊 Qualità visiva:")
-    print(f"     PSNR (cover vs stego): {psnr:.2f} dB")
+    print("Qualità visiva:")
+    print("PSNR (cover vs stego): {psnr:.2f} dB")
     if psnr > 40:
-        print(f"     ✅ PSNR > 40 dB → alterazioni impercettibili!")
+        print("PSNR > 40 dB → alterazioni impercettibili!")
     elif psnr > 30:
-        print(f"     ⚠️  PSNR 30-40 dB → alterazioni minime, possibili lievi artefatti.")
+        print("PSNR 30-40 dB → alterazioni minime, possibili lievi artefatti.")
     else:
-        print(f"     ❌ PSNR < 30 dB → alterazioni visibili. Prova un delta più basso.")
+        print("PSNR < 30 dB → alterazioni visibili. Prova un delta più basso.")
 
-    print(f"\n  🎉 Fase 3 completata! Output salvati in '{output_dir}/'")
-
-
-# ═══════════════════════════════════════════════════════════════
-#  FASE 4 — Estrazione del Messaggio
-# ═══════════════════════════════════════════════════════════════
+    print("Fase 3 completata! Output salvati in '{output_dir}/'")
 
 def demo_extract(
     stego_image_path: str,
+    original_image_path: str,
     strategy: str = "C",
     box_index: int | None = None,
     model_name: str = "yolov8n.pt",
@@ -429,37 +320,7 @@ def demo_extract(
     delta: float = 15.0,
     output_dir: str = "output",
 ) -> None:
-    """
-    Fase 4 — Estrazione blind del messaggio dalla stego-image.
 
-    Il processo inverso all'embedding:
-    1. Rilevamento YOLO sulla stego-image per ritrovare le coordinate della ROI
-    2. Decomposizione SVD dei blocchi nella ROI
-    3. Estrazione blind tramite QIM (non richiede l'immagine originale)
-    4. Decodifica la sequenza binaria in testo
-
-    Parametri
-    ---------
-    stego_image_path : str
-        Percorso della stego-image (l'immagine con il messaggio nascosto).
-    strategy : str
-        Strategia di selezione ROI: 'A', 'B', 'C'.
-        Deve corrispondere a quella usata in fase di embedding.
-    box_index : int | None
-        Indice del bounding box (solo strategia A).
-    model_name : str
-        Modello YOLOv8.
-    confidence : float
-        Soglia di confidenza YOLO.
-    block_size : int
-        Dimensione dei blocchi (deve corrispondere all'embedding).
-    sv_range : str
-        Range dei SV usati: 'first', 'mid', 'last' (deve corrispondere all'embedding).
-    delta : float
-        Passo di quantizzazione QIM (deve corrispondere all'embedding).
-    output_dir : str
-        Cartella di output.
-    """
     from src.yolo_roi import (
         load_yolo_model,
         detect_objects,
@@ -476,285 +337,143 @@ def demo_extract(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"\n{'═' * 60}")
-    print(f"  FASE 4 — ESTRAZIONE DEL MESSAGGIO")
-    print(f"{'═' * 60}")
-    print(f"\n  📷 Stego-image: {stego_image_path}")
+    print(f"{'' * 60}")
+    print("FASE 4 — ESTRAZIONE DEL MESSAGGIO (INFORMED)")
+    print(f"{'' * 60}")
+    print(f"Stegoimage: {stego_image_path}")
+    print(f"Immagine originale: {original_image_path}")
 
-    # ─── Step 1: Rilevamento YOLO per ritrovare la ROI ───
-    print(f"\n  ── Step 1: Rilevamento YOLO — individuare la ROI ──")
-    print(f"     (YOLO deve ritrovare gli stessi oggetti rilevati in fase di embedding)")
+    print("Step 1: Rilevamento YOLO — individuare la ROI ")
+    print("(YOLO deve ritrovare gli stessi oggetti rilevati in fase di embedding)")
 
     model = load_yolo_model(model_name)
     bounding_boxes = detect_objects(model, stego_image_path, confidence_threshold=confidence)
 
     stego_matrix = load_image_as_matrix(stego_image_path, grayscale=True)
+    original_matrix = load_image_as_matrix(original_image_path, grayscale=True)
     image_shape = stego_matrix.shape[:2]
 
     roi_result = select_roi(image_shape, bounding_boxes, strategy=strategy, box_index=box_index)
     print_detection_report(bounding_boxes, roi_result, image_shape)
 
-    # Determina le coordinate della ROI
     if roi_result.selected_box is not None:
         bb = roi_result.selected_box
         roi_coords = (bb.y1, bb.x1, bb.y2, bb.x2)
     else:
-        # Strategia B o nessun oggetto: usa l'intera immagine
+
         roi_coords = (0, 0, image_shape[0], image_shape[1])
 
     y1, x1, y2, x2 = roi_coords
     roi_matrix = stego_matrix[y1:y2, x1:x2]
-    print(f"\n  📐 ROI individuata: ({x1},{y1})→({x2},{y2}) = {y2 - y1}×{x2 - x1} pixel")
+    print("ROI individuata: ({x1},{y1})→({x2},{y2}) = {y2  y1}×{x2  x1} pixel")
 
-    # ─── Step 2: Info sulla capacità ───
-    print(f"\n  ── Step 2: Informazioni ROI e parametri di estrazione ──")
+    print("Step 2: Informazioni ROI e parametri di estrazione ")
     capacity = compute_capacity(roi_matrix, block_size, sv_range)
-    print(f"     Block size:          {block_size}×{block_size}")
-    print(f"     SV range:            {sv_range}")
-    print(f"     Delta (QIM):         {delta}")
-    print(f"     Blocchi nella ROI:   {capacity['n_blocks']}")
-    print(f"     Capacità massima:    {capacity['total_bits']} bit ({capacity['max_text_chars']} caratteri)")
+    print(f"Block size:          {block_size}×{block_size}")
+    print(f"SV range:            {sv_range}")
+    print(f"Delta:               {delta}")
+    print(f"Blocchi nella ROI:   {capacity['n_blocks']}")
+    print("Capacità massima:    {capacity['total_bits']} bit ({capacity['max_text_chars']} caratteri)")
 
-    # ─── Step 3: Estrazione blind tramite SVD + QIM ───
-    print(f"\n  ── Step 3: Estrazione blind (SVD + QIM) ──")
-    print(f"     ⏳ Decomposizione SVD dei blocchi ed estrazione dei bit...")
+    print("Step 3: Estrazione informed (SVD + confronto con originale) ")
+    print("Decomposizione SVD dei blocchi ed estrazione dei bit...")
 
     extracted_bits = extract_from_full_image(
-        stego_matrix, roi_coords,
-        block_size=block_size, sv_range=sv_range, delta=delta,
+        stego_matrix, original_matrix, roi_coords,
+        block_size=block_size, sv_range=sv_range,
     )
 
-    print(f"     Bit estratti: {len(extracted_bits)}")
+    print(f"Bit estratti: {len(extracted_bits)}")
 
-    # ─── Step 4: Decodifica ───
-    print(f"\n  ── Step 4: Decodifica del payload ──")
+    print("Step 4: Decodifica del payload (ASCII 7bit) ")
     extracted_message = binary_to_text(extracted_bits)
 
-    print(f"\n  {'═' * 56}")
-    print(f"  📩 MESSAGGIO ESTRATTO:")
-    print(f"  {'─' * 56}")
+    print(f"{'' * 56}")
+    print("Extracted:")
+    print(f"{'' * 56}")
     if extracted_message:
-        print(f"  \"{extracted_message}\"")
-        print(f"  {'─' * 56}")
-        print(f"  Lunghezza: {len(extracted_message)} caratteri")
+        print("\"{extracted_message}\"")
+        print(f"{'' * 56}")
+        print("Lunghezza: {len(extracted_message)} caratteri")
     else:
-        print(f"  (nessun messaggio rilevato o messaggio vuoto)")
-        print(f"  {'─' * 56}")
-        print(f"  ⚠️  Possibili cause:")
-        print(f"     - Parametri non corrispondenti (block-size, sv-range, delta)")
-        print(f"     - Strategia ROI diversa da quella usata nell'embedding")
-        print(f"     - L'immagine è stata compressa o alterata dopo l'embedding")
-    print(f"  {'═' * 56}")
+        print("(nessun messaggio rilevato o messaggio vuoto)")
+        print(f"{'' * 56}")
+        print("Possibili cause:")
+        print("- Parametri non corrispondenti (block-size, sv-range, delta)")
+        print("- Strategia ROI diversa da quella usata nell'embedding")
+        print("- L'immagine è stata compressa o alterata dopo l'embedding")
+        print("- L'immagine originale fornita non è corretta")
+    print(f"{'' * 56}")
 
-    # ─── Salva detection annotata (opzionale) ───
     annotated_img = draw_detections(stego_image_path, bounding_boxes, roi_result)
     annotated_path = os.path.join(output_dir, "extract_yolo_detections.png")
     annotated_img.save(annotated_path)
-    print(f"\n  💾 Detection YOLO sull'immagine stego: {annotated_path}")
+    print(f"Detection YOLO sull'immagine stego: {annotated_path}")
 
-    print(f"\n  🎉 Fase 4 completata!")
+    print("Fase 4 completata!")
 
+if __name__ == "__main__":
 
-# ═══════════════════════════════════════════════════════════════
-#  CLI — Entry Point
-# ═══════════════════════════════════════════════════════════════
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="SVD Image Steganography — Validazione, Demo, YOLO ROI, Embedding ed Estrazione",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Esempi:
-  python main.py                                        # Solo validazione SVD
-  python main.py --image foto.png                       # Validazione + demo immagine
-  python main.py --image foto.png --no-validate         # Solo demo immagine
-  python main.py --image foto.png --mean-centering-test # Test mean centering
-  python main.py --image foto.png --yolo                # Fase 2: YOLO detection + ROI
-  python main.py --image foto.png --yolo --strategy A   # YOLO con strategia A (soggetti)
-  python main.py --image foto.png --yolo --strategy B   # YOLO con strategia B (sfondo)
-  python main.py --image foto.png --yolo --strategy C   # YOLO con strategia C (auto, default)
-  python main.py --image foto.png --yolo --box-index 1  # Usa il 2° bounding box (strategia A)
-
-  # Fase 3: Embedding del messaggio
-  python main.py --image foto.png --embed --message "Messaggio segreto"
-  python main.py --image foto.png --embed --message "Test" --sv-range first
-  python main.py --image foto.png --embed --message "Test" --sv-range last
-  python main.py --image foto.png --embed --message "Test" --block-size 16 --delta 20
-
-  # Fase 4: Estrazione del messaggio
-  python main.py --image output/stego_image.png --extract
-  python main.py --image stego.png --extract --sv-range first --delta 20
-  python main.py --image stego.png --extract --strategy A --block-size 16
-        """,
-    )
-    # ── Fase 1 ──
-    parser.add_argument("--image", "-i", type=str, help="Percorso di un'immagine per la demo SVD")
-    parser.add_argument("--output", "-o", type=str, default="output", help="Directory di output (default: output)")
-    parser.add_argument("--no-validate", action="store_true", help="Salta la validazione matrici")
-    parser.add_argument("--mean-centering-test", action="store_true", help="Testa l'impatto del mean centering")
-
-    # ── Fase 2 ──
-    parser.add_argument("--yolo", action="store_true", help="Attiva il rilevamento YOLO e la selezione della ROI (Fase 2)")
-    parser.add_argument(
-        "--strategy", "-s",
-        type=str,
-        default="C",
-        choices=["A", "B", "C"],
-        help=(
-            "Strategia di embedding per la selezione della ROI: "
-            "A=soggetti (bounding box), B=sfondo, C=auto (bbox più grande). "
-            "Default: C"
-        ),
-    )
-    parser.add_argument(
-        "--box-index",
-        type=int,
-        default=None,
-        help="Indice del bounding box da usare (solo strategia A). Default: il più grande.",
-    )
-    parser.add_argument(
-        "--yolo-model",
-        type=str,
-        default="yolov8n.pt",
-        help="Nome o percorso del modello YOLOv8 (default: yolov8n.pt)",
-    )
-    parser.add_argument(
-        "--yolo-confidence",
-        type=float,
-        default=0.25,
-        help="Soglia di confidenza per le detection YOLO (default: 0.25)",
-    )
-
-    # ── Fase 3 ──
-    parser.add_argument("--embed", action="store_true", help="Attiva l'embedding del messaggio (Fase 3)")
-    parser.add_argument(
-        "--message", "-m",
-        type=str,
-        default=None,
-        help="Il messaggio segreto da nascondere nella stego-image.",
-    )
-    parser.add_argument(
-        "--sv-range",
-        type=str,
-        default="mid",
-        choices=["first", "mid", "last"],
-        help=(
-            "Quali valori singolari modificare per l'embedding/estrazione: "
-            "first=primi (robusto, artefatti visibili), "
-            "mid=intermedi (miglior compromesso, default), "
-            "last=ultimi (invisibile, fragile a JPEG)"
-        ),
-    )
-    parser.add_argument(
-        "--block-size",
-        type=int,
-        default=8,
-        help="Dimensione dei blocchi per la SVD (default: 8). Valori comuni: 4, 8, 16.",
-    )
-    parser.add_argument(
-        "--delta",
-        type=float,
-        default=15.0,
-        help="Passo di quantizzazione QIM (default: 15.0). Più grande = più robusto ma più visibile.",
-    )
-
-    # ── Fase 4 ──
-    parser.add_argument(
-        "--extract",
-        action="store_true",
-        help=(
-            "Attiva l'estrazione del messaggio dalla stego-image (Fase 4). "
-            "Richiede --image con il percorso della stego-image. "
-            "I parametri --block-size, --sv-range e --delta devono corrispondere "
-            "a quelli usati in fase di embedding."
-        ),
-    )
-
-    args = parser.parse_args()
-
-    # Step 1: Validazione SVD (Fase 1)
-    if not args.no_validate and not args.yolo and not args.embed and not args.extract:
+    if RUN_VALIDATION:
         run_all_tests()
 
-    # Step 2: Demo SVD su immagine (Fase 1)
-    if args.image and not args.yolo and not args.embed and not args.extract:
-        if not os.path.exists(args.image):
-            print(f"\n  ❌ Errore: file '{args.image}' non trovato!")
+    needs_image = RUN_SVD_DEMO or RUN_MEAN_CENTERING_TEST or RUN_YOLO or RUN_EMBED or RUN_EXTRACT
+    if needs_image:
+        if not os.path.exists(IMAGE_PATH):
+            print("Errore: file '{IMAGE_PATH}' non trovato!")
+            print("Configura IMAGE_PATH nella sezione CONFIGURAZIONE di main.py")
             sys.exit(1)
 
-        demo_image_svd(args.image, args.output)
+    if RUN_SVD_DEMO:
+        demo_image_svd(IMAGE_PATH, OUTPUT_DIR)
 
-        # Step 3: Test mean centering (opzionale)
-        if args.mean_centering_test:
-            test_mean_centering_impact(args.image)
+    if RUN_MEAN_CENTERING_TEST:
+        test_mean_centering_impact(IMAGE_PATH)
 
-    # Step 4: Fase 2 — YOLO detection + ROI
-    if args.yolo and not args.embed and not args.extract:
-        if not args.image:
-            print("\n  ❌ Errore: --yolo richiede --image <percorso_immagine>!")
-            sys.exit(1)
-        if not os.path.exists(args.image):
-            print(f"\n  ❌ Errore: file '{args.image}' non trovato!")
-            sys.exit(1)
-
+    if RUN_YOLO:
         demo_yolo_roi(
-            image_path=args.image,
-            strategy=args.strategy,
-            box_index=args.box_index,
-            model_name=args.yolo_model,
-            confidence=args.yolo_confidence,
-            output_dir=args.output,
+            image_path=IMAGE_PATH,
+            strategy=STRATEGY,
+            box_index=BOX_INDEX,
+            model_name=YOLO_MODEL,
+            confidence=YOLO_CONFIDENCE,
+            output_dir=OUTPUT_DIR,
         )
 
-    # Step 5: Fase 3 — Embedding del messaggio
-    if args.embed:
-        if not args.image:
-            print("\n  ❌ Errore: --embed richiede --image <percorso_immagine>!")
-            sys.exit(1)
-        if not os.path.exists(args.image):
-            print(f"\n  ❌ Errore: file '{args.image}' non trovato!")
-            sys.exit(1)
-        if not args.message:
-            print("\n  ❌ Errore: --embed richiede --message <messaggio_segreto>!")
-            sys.exit(1)
-
+    if RUN_EMBED:
         demo_embed(
-            image_path=args.image,
-            message=args.message,
-            strategy=args.strategy,
-            box_index=args.box_index,
-            model_name=args.yolo_model,
-            confidence=args.yolo_confidence,
-            block_size=args.block_size,
-            sv_range=args.sv_range,
-            delta=args.delta,
-            output_dir=args.output,
+            image_path=IMAGE_PATH,
+            message=MESSAGE,
+            strategy=STRATEGY,
+            box_index=BOX_INDEX,
+            model_name=YOLO_MODEL,
+            confidence=YOLO_CONFIDENCE,
+            block_size=BLOCK_SIZE,
+            sv_range=SV_RANGE,
+            delta=DELTA,
+            output_dir=OUTPUT_DIR,
         )
 
-    # Step 6: Fase 4 — Estrazione del messaggio
-    if args.extract:
-        if not args.image:
-            print("\n  ❌ Errore: --extract richiede --image <percorso_stego_image>!")
-            sys.exit(1)
-        if not os.path.exists(args.image):
-            print(f"\n  ❌ Errore: file '{args.image}' non trovato!")
+    if RUN_EXTRACT:
+        stego_path = os.path.join(OUTPUT_DIR, "stego_image.png")
+        if not os.path.exists(stego_path):
+            print("Errore: stegoimage '{stego_path}' non trovata!")
+            print("Esegui prima l'embedding (RUN_EMBED = True).")
             sys.exit(1)
 
         demo_extract(
-            stego_image_path=args.image,
-            strategy=args.strategy,
-            box_index=args.box_index,
-            model_name=args.yolo_model,
-            confidence=args.yolo_confidence,
-            block_size=args.block_size,
-            sv_range=args.sv_range,
-            delta=args.delta,
-            output_dir=args.output,
+            stego_image_path=stego_path,
+            original_image_path=IMAGE_PATH,
+            strategy=STRATEGY,
+            box_index=BOX_INDEX,
+            model_name=YOLO_MODEL,
+            confidence=YOLO_CONFIDENCE,
+            block_size=BLOCK_SIZE,
+            sv_range=SV_RANGE,
+            delta=DELTA,
+            output_dir=OUTPUT_DIR,
         )
 
-    if not args.image and args.no_validate and not args.yolo and not args.embed and not args.extract:
-        print("  ⚠️  Nessuna operazione eseguita. Usa --help per vedere le opzioni.")
-
-
-if __name__ == "__main__":
-    main()
+    if not any([RUN_VALIDATION, RUN_SVD_DEMO, RUN_MEAN_CENTERING_TEST,
+                RUN_YOLO, RUN_EMBED, RUN_EXTRACT]):
+        print("Nessuna operazione eseguita. Abilita almeno una fase nella CONFIGURAZIONE.")
