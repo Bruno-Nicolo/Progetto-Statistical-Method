@@ -83,6 +83,19 @@ Verifica come variano le metriche all'aumentare del carico (da 1 carattere fino 
 
 Valuta l'inserimento dello stesso messaggio in ROI di diverse dimensioni (100%, 75%, 50%, 25% dell'immagine) e verifica il corretto utilizzo della Strategia B (sfondo).
 
+#### Test 10 — Metriche di Approssimazione SVD
+
+Analizza l'impatto dello steganogramma sull'algebra lineare sottostante, computando per ogni configurazione `(block_size, sv_range, delta)`:
+
+1.  **Errore di Approssimazione**:
+    -   **Norma di Frobenius** $\|A - A_{stego}\|_F$: misura l'errore quadratico totale della matrice differenza. Equivale a $\sqrt{\sum_{i,j}(a_{ij} - a'_{ij})^2}$.
+    -   **Norma Spettrale** (2-norma) $\|A - A_{stego}\|_2 = \sigma_{\max}(A - A_{stego})$: quantifica il massimo "allungamento" causato dalla modifica steganografica. È il primo valore singolare della matrice differenza.
+2.  **Fattore di Compressione e Occupazione di Memoria**:
+    -   Fattore di compressione: $2k\left(\frac{1}{m} + \frac{1}{n}\right)$, dove $k$ è il rango del blocco e $m \times n$ è la sua dimensione.
+    -   Confronto scalari: matrice piena ($m \times n$) vs. rappresentazione SVD troncata ($k(m + n + 1)$).
+3.  **Numero di Condizionamento**:
+    -   $\kappa(A) = \frac{\sigma_1}{\sigma_n}$ calcolato per-blocco e mediato, sia sulla ROI originale ($\kappa_{orig}$) che sulla ROI stego ($\kappa_{stego}$). Un aumento significativo di $\kappa$ segnala che l'embedding ha reso la matrice più mal condizionata.
+
 ### Output dei Test
 
 Tutti i risultati vengono salvati nella directory `test_output/` (configurabile con `--output`):
@@ -97,6 +110,7 @@ Tutti i risultati vengono salvati nella directory `test_output/` (configurabile 
 | `results_jpeg.csv`         | Robustezza alla compressione JPEG (Test 6)          |
 | `results_sv_visual.csv`    | Metriche del confronto visivo (Test 7)              |
 | `results_scaling.csv`      | Scalabilità con lunghezza messaggio (Test 8)        |
+| `results_approx_metrics.csv` | Norme, compressione e condizionamento (Test 10)   |
 | `stego_*.png`              | Immagini stego per confronto visivo                 |
 | `diff_*.png`               | Mappe di differenza amplificate 10×                 |
 | `test_image_synthetic.png` | Immagine sintetica usata (se non fornita)           |
@@ -109,6 +123,10 @@ Tutti i risultati vengono salvati nella directory `test_output/` (configurabile 
 | **SSIM**        | Structural Similarity Index (fedeltà strutturale) | 0.0 – 1.0 | > 0.99  |
 | **BER**         | Bit Error Rate (percentuale bit errati)           | 0.0 – 1.0 | 0.0     |
 | **Correttezza** | Match esatto del messaggio stringa                | ✅/❌     | ✅      |
+| **$\|\cdot\|_F$** | Norma di Frobenius di $A - A_{stego}$           | 0 – ∞     | → 0     |
+| **$\|\cdot\|_2$** | Norma Spettrale (2-norma) di $A - A_{stego}$    | 0 – ∞     | → 0     |
+| **CF**          | Fattore di compressione $2k(1/m+1/n)$             | 0 – ∞     | < 1     |
+| **$\kappa$**    | Numero di condizionamento $\sigma_1/\sigma_n$     | 1 – ∞     | → 1     |
 
 ---
 
@@ -121,7 +139,7 @@ Tutti i risultati vengono salvati nella directory `test_output/` (configurabile 
 | **Velocità**             | Ultra-rapido (< 2 secondi)      | Lento (dipende dal numero di test)        |
 | **Output**               | Log test Passati/Falliti        | Tabelle, file CSV, immagini di differenza |
 | **Uso in Sviluppo**      | Da usare durante il coding (CI) | Da usare per calibrare i parametri        |
-| **Metriche**             | Solo base (Match, Errore SVD)   | Avanzate (SSIM, BER, curve di robustezza) |
+| **Metriche**             | Solo base (Match, Errore SVD)   | Avanzate (SSIM, BER, norme, $\kappa$, curve di robustezza) |
 | **Ambito**               | Unit Testing                    | Benchmarking / Stress Testing             |
 
 In sintesi: usa `quick_test.py` per essere sicuro di non aver rotto nulla; usa `test_performance.py` per capire quanto è "buona" una specifica configurazione di parametri.

@@ -735,6 +735,179 @@ def test_roi_embedding(
 
     return results
 
+def test_approximation_metrics(
+    image: np.ndarray,
+    roi_coords: tuple[int, int, int, int],
+) -> list[dict]:
+    """
+    TEST 10 — METRICHE DI APPROSSIMAZIONE SVD
+    Calcola per ogni configurazione (block_size, sv_range, delta):
+      1. Errore di approssimazione:
+         - Norma di Frobenius: ||A - A_stego||_F
+         - Norma Spettrale (2-norma): σ_max(A - A_stego)
+      2. Fattore di compressione e occupazione di memoria:
+         - Fattore: 2k * (1/m + 1/n)
+         - Memoria matrice piena vs. rappresentazione SVD troncata
+      3. Numero di condizionamento:
+         - κ(A_orig) = σ_1 / σ_n  per la ROI originale
+         - κ(A_stego) = σ_1 / σ_n  per la ROI stego
+    """
+
+    print(f"{'=' * 70}")
+    print("TEST 10 — METRICHE DI APPROSSIMAZIONE SVD")
+    print(f"{'=' * 70}")
+
+    message = "Test metriche di approssimazione SVD"
+    payload_bits = text_to_binary(message)
+
+    block_sizes = [4, 8, 16]
+    sv_ranges = ["first", "mid", "last"]
+    deltas = [5.0, 10.0, 15.0, 20.0, 25.0, 30.0]
+
+    y1, x1, y2, x2 = roi_coords
+    roi_orig = image[y1:y2, x1:x2].copy()
+    m_roi, n_roi = roi_orig.shape
+    print(f"ROI: {m_roi}×{n_roi} pixel")
+    print(f"Messaggio: \"{message}\" ({len(message)} char, {len(payload_bits)} bit)\n")
+
+    U_roi, sigma_roi, Vt_roi = svd_compact(roi_orig)
+    k_roi = len(sigma_roi)
+    kappa_orig_global = float(sigma_roi[0] / sigma_roi[-1]) if sigma_roi[-1] > 1e-15 else float('inf')
+    mem_full = m_roi * n_roi
+    mem_svd = k_roi * (m_roi + n_roi + 1)
+    compression_ratio_global = mem_full / mem_svd if mem_svd > 0 else float('inf')
+    compression_factor_global = 2.0 * k_roi * (1.0 / m_roi + 1.0 / n_roi)
+
+    print("— Metriche globali ROI (SVD compatta, senza embedding) —")
+    print(f"  Rango effettivo k      : {k_roi}")
+    print(f"  σ_1                    : {sigma_roi[0]:.4f}")
+    print(f"  σ_k                    : {sigma_roi[-1]:.4f}")
+    print(f"  κ(ROI_orig)            : {kappa_orig_global:.4f}")
+    print(f"  Memoria matrice piena  : {mem_full:,} scalari")
+    print(f"  Memoria SVD troncata   : {mem_svd:,} scalari  (k={k_roi})")
+    print(f"  Rapporto compressione  : {compression_ratio_global:.2f}×")
+    print(f"  Fattore 2k(1/m+1/n)   : {compression_factor_global:.6f}")
+    print()
+
+    results = []
+
+    print(f"{'#':>4}  {'Block':>5}  {'SV Range':>8}  {'Delta':>5}  "
+          f"{'||·||_F':>10}  {'||·||_2':>10}  "
+          f"{'κ_orig':>10}  {'κ_stego':>10}  "
+          f"{'CF':>8}  {'Mem_full':>9}  {'Mem_svd':>9}")
+    print(f"{'-' * 110}")
+
+    count = 0
+    for block_size in block_sizes:
+        for sv_range in sv_ranges:
+            for delta in deltas:
+                count += 1
+
+                capacity = compute_capacity(roi_orig, block_size, sv_range)
+                if len(payload_bits) > capacity['total_bits']:
+                    results.append({
+                        "block_size": block_size,
+                        "sv_range": sv_range,
+                        "delta": delta,
+                        "frobenius_norm": None,
+                        "spectral_norm": None,
+                        "kappa_orig": None,
+                        "kappa_stego": None,
+                        "compression_factor": None,
+                        "mem_full_scalars": None,
+                        "mem_svd_scalars": None,
+                        "note": "Capacità insufficiente",
+                    })
+                    print(f"{count:>4}  {block_size:>5}  {sv_range:>8}  {delta:>5.0f}  "
+                          f"{'':>10}  {'':>10}  "
+                          f"{'':>10}  {'':>10}  "
+                          f"{'':>8}  {'':>9}  {'SKIP':>9}")
+                    continue
+
+                stego_image, _ = embed_in_full_image(
+                    image, roi_coords, payload_bits,
+                    block_size=block_size, sv_range=sv_range, delta=delta,
+                )
+                roi_stego = stego_image[y1:y2, x1:x2].copy()
+
+                diff_matrix = roi_orig - roi_stego
+                frobenius_norm = float(np.sqrt(np.sum(diff_matrix ** 2)))
+
+                _, sigma_diff, _ = svd_compact(diff_matrix)
+                spectral_norm = float(sigma_diff[0]) if len(sigma_diff) > 0 else 0.0
+
+                k_block = block_size
+                mem_block_full = block_size * block_size
+                mem_block_svd = k_block * (block_size + block_size + 1)
+                compression_factor = 2.0 * k_block * (1.0 / block_size + 1.0 / block_size)
+
+                n_blocks = capacity['n_blocks']
+                mem_total_full = n_blocks * mem_block_full
+                mem_total_svd = n_blocks * mem_block_svd
+
+                from src.image_utils import split_into_blocks as _split
+                orig_blocks, _, _ = _split(roi_orig, block_size)
+                stego_blocks, _, _ = _split(roi_stego, block_size)
+
+                kappa_orig_list = []
+                kappa_stego_list = []
+                for ob, sb in zip(orig_blocks, stego_blocks):
+                    _, s_o, _ = svd_compact(ob)
+                    _, s_s, _ = svd_compact(sb)
+                    if len(s_o) > 0 and s_o[-1] > 1e-15:
+                        kappa_orig_list.append(s_o[0] / s_o[-1])
+                    else:
+                        kappa_orig_list.append(float('inf'))
+                    if len(s_s) > 0 and s_s[-1] > 1e-15:
+                        kappa_stego_list.append(s_s[0] / s_s[-1])
+                    else:
+                        kappa_stego_list.append(float('inf'))
+
+                finite_ko = [k for k in kappa_orig_list if k != float('inf')]
+                finite_ks = [k for k in kappa_stego_list if k != float('inf')]
+                kappa_orig_mean = float(np.mean(finite_ko)) if finite_ko else float('inf')
+                kappa_stego_mean = float(np.mean(finite_ks)) if finite_ks else float('inf')
+
+                result = {
+                    "block_size": block_size,
+                    "sv_range": sv_range,
+                    "delta": delta,
+                    "frobenius_norm": frobenius_norm,
+                    "spectral_norm": spectral_norm,
+                    "kappa_orig": kappa_orig_mean,
+                    "kappa_stego": kappa_stego_mean,
+                    "compression_factor": compression_factor,
+                    "mem_full_scalars": mem_total_full,
+                    "mem_svd_scalars": mem_total_svd,
+                    "note": "",
+                }
+                results.append(result)
+
+                ko_str = f"{kappa_orig_mean:.2f}" if kappa_orig_mean != float('inf') else "∞"
+                ks_str = f"{kappa_stego_mean:.2f}" if kappa_stego_mean != float('inf') else "∞"
+                print(f"{count:>4}  {block_size:>5}  {sv_range:>8}  {delta:>5.0f}  "
+                      f"{frobenius_norm:>10.4f}  {spectral_norm:>10.4f}  "
+                      f"{ko_str:>10}  {ks_str:>10}  "
+                      f"{compression_factor:>8.4f}  {mem_total_full:>9,}  {mem_total_svd:>9,}")
+
+
+    valid = [r for r in results if r["frobenius_norm"] is not None]
+    skipped = len(results) - len(valid)
+    print(f"\n{'=' * 70}")
+    print(f"Riepilogo Test 10: {len(valid)} configurazioni valide, {skipped} saltate")
+    if valid:
+        avg_frob = np.mean([r["frobenius_norm"] for r in valid])
+        avg_spec = np.mean([r["spectral_norm"] for r in valid])
+        print(f"  ||A-A_stego||_F  medio : {avg_frob:.4f}")
+        print(f"  ||A-A_stego||_2  medio : {avg_spec:.4f}")
+        finite_kappas = [r["kappa_orig"] for r in valid if r["kappa_orig"] != float('inf')]
+        if finite_kappas:
+            print(f"  κ(A_orig) medio        : {np.mean(finite_kappas):.2f}")
+    print(f"{'=' * 70}\n")
+
+    return results
+
+
 def save_results_csv(results: list[dict], filename: str, output_dir: str = "test_output") -> str:
 
     os.makedirs(output_dir, exist_ok=True)
@@ -768,7 +941,7 @@ def main():
     parser.add_argument("-o", "--output", type=str, default="test_output",
                         help="Directory di output per risultati e CSV (default: test_output)")
     parser.add_argument("-t", "--test", type=int, default=None,
-                help="Esegui solo il test specificato (1-9). Se omesso, esegue tutti.")
+                help="Esegui solo il test specificato (1-10). Se omesso, esegue tutti.")
     args = parser.parse_args()
 
     output_dir = args.output
@@ -807,13 +980,14 @@ def main():
         7: ("Impatto visivo SV", test_sv_range_visual_impact, "results_sv_visual.csv"),
         8: ("Scalabilita messaggio", test_message_length_scaling, "results_scaling.csv"),
         9: ("Embedding con ROI", test_roi_embedding, "results_roi.csv"),
+        10: ("Metriche approssimazione", test_approximation_metrics, "results_approx_metrics.csv"),
     }
 
     tests_to_run = [args.test] if args.test else list(all_tests.keys())
 
     for test_id in tests_to_run:
         if test_id not in all_tests:
-            print(f"Test {test_id} non esiste. Disponibili: 1-9")
+            print(f"Test {test_id} non esiste. Disponibili: 1-10")
             continue
 
         name, func, csv_file = all_tests[test_id]
