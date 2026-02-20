@@ -739,20 +739,6 @@ def test_approximation_metrics(
     image: np.ndarray,
     roi_coords: tuple[int, int, int, int],
 ) -> list[dict]:
-    """
-    TEST 10 — METRICHE DI APPROSSIMAZIONE SVD
-    Calcola per ogni configurazione (block_size, sv_range, delta):
-      1. Errore di approssimazione:
-         - Norma di Frobenius: ||A - A_stego||_F
-         - Norma Spettrale (2-norma): σ_max(A - A_stego)
-      2. Fattore di compressione e occupazione di memoria:
-         - Fattore: 2k * (1/m + 1/n)
-         - Memoria matrice piena vs. rappresentazione SVD troncata
-      3. Numero di condizionamento:
-         - κ(A_orig) = σ_1 / σ_n  per la ROI originale
-         - κ(A_stego) = σ_1 / σ_n  per la ROI stego
-    """
-
     print(f"{'=' * 70}")
     print("TEST 10 — METRICHE DI APPROSSIMAZIONE SVD")
     print(f"{'=' * 70}")
