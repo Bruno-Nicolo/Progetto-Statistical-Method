@@ -24,7 +24,7 @@ Lo script esegue 7 batterie di test su dati sintetici generati casualmente (picc
 4.  **TEST 4 — Qualità Visiva (Coarse)**: Controlla che il PSNR non scenda sotto soglie critiche per diversi valori di delta.
 5.  **TEST 5 — Edge Cases**: Verifica il comportamento con immagini uniformi (tutte grigie), valori estremi (0 o 255) e matrici con dimensioni non multiple del block size.
 6.  **TEST 6 — Consistenza SV Range**: Assicura che le tre strategie di selezione (`first`, `mid`, `last`) siano tutte funzionanti e coerenti.
-7.  **TEST 7 — Selezione ROI**: Testa la logica di YOLO/ROI (class `BoundingBox` e strategie A, B, C) e verifica che i pixel esterni alla ROI non vengano minimamente modificati durante l'embedding.
+7.  **TEST 7 — Selezione ROI**: Testa la logica di YOLO/ROI (tramite inferenza reale con il modello YOLOv8 e strategie A, B, C) e verifica che i pixel esterni alla ROI non vengano minimamente modificati durante l'embedding.
 
 ---
 
@@ -88,58 +88,120 @@ Valuta l'inserimento dello stesso messaggio in ROI di diverse dimensioni (100%, 
 Analizza l'impatto dello steganogramma sull'algebra lineare sottostante, computando per ogni configurazione `(block_size, sv_range, delta)`:
 
 1.  **Errore di Approssimazione**:
-    -   **Norma di Frobenius** $\|A - A_{stego}\|_F$: misura l'errore quadratico totale della matrice differenza. Equivale a $\sqrt{\sum_{i,j}(a_{ij} - a'_{ij})^2}$.
-    -   **Norma Spettrale** (2-norma) $\|A - A_{stego}\|_2 = \sigma_{\max}(A - A_{stego})$: quantifica il massimo "allungamento" causato dalla modifica steganografica. È il primo valore singolare della matrice differenza.
+    - **Norma di Frobenius** $\|A - A_{stego}\|_F$: misura l'errore quadratico totale della matrice differenza. Equivale a $\sqrt{\sum_{i,j}(a_{ij} - a'_{ij})^2}$.
+    - **Norma Spettrale** (2-norma) $\|A - A_{stego}\|_2 = \sigma_{\max}(A - A_{stego})$: quantifica il massimo "allungamento" causato dalla modifica steganografica. È il primo valore singolare della matrice differenza.
 2.  **Fattore di Compressione e Occupazione di Memoria**:
-    -   Fattore di compressione: $2k\left(\frac{1}{m} + \frac{1}{n}\right)$, dove $k$ è il rango del blocco e $m \times n$ è la sua dimensione.
-    -   Confronto scalari: matrice piena ($m \times n$) vs. rappresentazione SVD troncata ($k(m + n + 1)$).
+    - Fattore di compressione: $2k\left(\frac{1}{m} + \frac{1}{n}\right)$, dove $k$ è il rango del blocco e $m \times n$ è la sua dimensione.
+    - Confronto scalari: matrice piena ($m \times n$) vs. rappresentazione SVD troncata ($k(m + n + 1)$).
 3.  **Numero di Condizionamento**:
-    -   $\kappa(A) = \frac{\sigma_1}{\sigma_n}$ calcolato per-blocco e mediato, sia sulla ROI originale ($\kappa_{orig}$) che sulla ROI stego ($\kappa_{stego}$). Un aumento significativo di $\kappa$ segnala che l'embedding ha reso la matrice più mal condizionata.
+    - $\kappa(A) = \frac{\sigma_1}{\sigma_n}$ calcolato per-blocco e mediato, sia sulla ROI originale ($\kappa_{orig}$) che sulla ROI stego ($\kappa_{stego}$). Un aumento significativo di $\kappa$ segnala che l'embedding ha reso la matrice più mal condizionata.
 
 ### Output dei Test
 
 Tutti i risultati vengono salvati nella directory `test_output/` (configurabile con `--output`):
 
-| File                       | Contenuto                                           |
-| :------------------------- | :-------------------------------------------------- |
-| `results_sweep.csv`        | Risultati di tutte le 162 combinazioni di parametri |
-| `results_delta.csv`        | Impatto del delta sulla qualità (Test 2)            |
-| `results_capacity.csv`     | Analisi capacità massima (Test 3)                   |
-| `results_noise.csv`        | Robustezza al rumore (Test 4)                       |
-| `results_blur.csv`         | Robustezza al blur (Test 5)                         |
-| `results_jpeg.csv`         | Robustezza alla compressione JPEG (Test 6)          |
-| `results_sv_visual.csv`    | Metriche del confronto visivo (Test 7)              |
-| `results_scaling.csv`      | Scalabilità con lunghezza messaggio (Test 8)        |
-| `results_approx_metrics.csv` | Norme, compressione e condizionamento (Test 10)   |
-| `stego_*.png`              | Immagini stego per confronto visivo                 |
-| `diff_*.png`               | Mappe di differenza amplificate 10×                 |
-| `test_image_synthetic.png` | Immagine sintetica usata (se non fornita)           |
+| File                         | Contenuto                                           |
+| :--------------------------- | :-------------------------------------------------- |
+| `results_sweep.csv`          | Risultati di tutte le 162 combinazioni di parametri |
+| `results_delta.csv`          | Impatto del delta sulla qualità (Test 2)            |
+| `results_capacity.csv`       | Analisi capacità massima (Test 3)                   |
+| `results_noise.csv`          | Robustezza al rumore (Test 4)                       |
+| `results_blur.csv`           | Robustezza al blur (Test 5)                         |
+| `results_jpeg.csv`           | Robustezza alla compressione JPEG (Test 6)          |
+| `results_sv_visual.csv`      | Metriche del confronto visivo (Test 7)              |
+| `results_scaling.csv`        | Scalabilità con lunghezza messaggio (Test 8)        |
+| `results_approx_metrics.csv` | Norme, compressione e condizionamento (Test 10)     |
+| `stego_*.png`                | Immagini stego per confronto visivo                 |
+| `diff_*.png`                 | Mappe di differenza amplificate 10×                 |
+| `test_image_synthetic.png`   | Immagine sintetica usata (se non fornita)           |
 
 ### Metriche di Valutazione
 
-| Metrica         | Descrizione                                       | Range     | Target  |
-| :-------------- | :------------------------------------------------ | :-------- | :------ |
-| **PSNR**        | Peak Signal-to-Noise Ratio (fedeltà cromatica)    | 0 – ∞ dB  | > 40 dB |
-| **SSIM**        | Structural Similarity Index (fedeltà strutturale) | 0.0 – 1.0 | > 0.99  |
-| **BER**         | Bit Error Rate (percentuale bit errati)           | 0.0 – 1.0 | 0.0     |
-| **Correttezza** | Match esatto del messaggio stringa                | ✅/❌     | ✅      |
-| **$\|\cdot\|_F$** | Norma di Frobenius di $A - A_{stego}$           | 0 – ∞     | → 0     |
-| **$\|\cdot\|_2$** | Norma Spettrale (2-norma) di $A - A_{stego}$    | 0 – ∞     | → 0     |
-| **CF**          | Fattore di compressione $2k(1/m+1/n)$             | 0 – ∞     | < 1     |
-| **$\kappa$**    | Numero di condizionamento $\sigma_1/\sigma_n$     | 1 – ∞     | → 1     |
+| Metrica           | Descrizione                                       | Range     | Target  |
+| :---------------- | :------------------------------------------------ | :-------- | :------ |
+| **PSNR**          | Peak Signal-to-Noise Ratio (fedeltà cromatica)    | 0 – ∞ dB  | > 40 dB |
+| **SSIM**          | Structural Similarity Index (fedeltà strutturale) | 0.0 – 1.0 | > 0.99  |
+| **BER**           | Bit Error Rate (percentuale bit errati)           | 0.0 – 1.0 | 0.0     |
+| **Correttezza**   | Match esatto del messaggio stringa                | ✅/❌     | ✅      |
+| **$\|\cdot\|_F$** | Norma di Frobenius di $A - A_{stego}$             | 0 – ∞     | → 0     |
+| **$\|\cdot\|_2$** | Norma Spettrale (2-norma) di $A - A_{stego}$      | 0 – ∞     | → 0     |
+| **CF**            | Fattore di compressione $2k(1/m+1/n)$             | 0 – ∞     | < 1     |
+| **$\kappa$**      | Numero di condizionamento $\sigma_1/\sigma_n$     | 1 – ∞     | → 1     |
 
 ---
 
 ## 3. Confronto tra Quick Test e Performance Test
 
-| Caratteristica           | `quick_test.py`                 | `test_performance.py`                     |
-| :----------------------- | :------------------------------ | :---------------------------------------- |
-| **Obiettivo Principale** | Correttezza del codice          | Analisi scientifica e robustezza          |
-| **Dati in Input**        | Matrici random molto piccole    | Immagini reali o sintetiche strutturate   |
-| **Velocità**             | Ultra-rapido (< 2 secondi)      | Lento (dipende dal numero di test)        |
-| **Output**               | Log test Passati/Falliti        | Tabelle, file CSV, immagini di differenza |
-| **Uso in Sviluppo**      | Da usare durante il coding (CI) | Da usare per calibrare i parametri        |
+| Caratteristica           | `quick_test.py`                 | `test_performance.py`                                      |
+| :----------------------- | :------------------------------ | :--------------------------------------------------------- |
+| **Obiettivo Principale** | Correttezza del codice          | Analisi scientifica e robustezza                           |
+| **Dati in Input**        | Matrici random molto piccole    | Immagini reali o sintetiche strutturate                    |
+| **Velocità**             | Ultra-rapido (< 2 secondi)      | Lento (dipende dal numero di test)                         |
+| **Output**               | Log test Passati/Falliti        | Tabelle, file CSV, immagini di differenza                  |
+| **Uso in Sviluppo**      | Da usare durante il coding (CI) | Da usare per calibrare i parametri                         |
 | **Metriche**             | Solo base (Match, Errore SVD)   | Avanzate (SSIM, BER, norme, $\kappa$, curve di robustezza) |
-| **Ambito**               | Unit Testing                    | Benchmarking / Stress Testing             |
+| **Ambito**               | Unit Testing                    | Benchmarking / Stress Testing                              |
 
 In sintesi: usa `quick_test.py` per essere sicuro di non aver rotto nulla; usa `test_performance.py` per capire quanto è "buona" una specifica configurazione di parametri.
+
+---
+
+## 4. Dataset Test (`tests/test_dataset.py`)
+
+**Scopo**: Valutare le performance dell'algoritmo su un **intero dataset di immagini reali** 128×128, aggregando i risultati con statistiche (media, deviazione standard, min, max) per ottenere una valutazione statistica robusta.
+
+### Esecuzione
+
+```bash
+# Test completo su 50 immagini (default)
+python tests/test_dataset.py
+
+# Test con parametri personalizzati
+python tests/test_dataset.py --dataset artwork/ --max-images 20 --output risultati/
+
+# Esegui solo un test specifico (es. Test 6 sulle ROI)
+python tests/test_dataset.py --test 6 --max-images 10
+
+# Tutti i parametri
+python tests/test_dataset.py -d artwork/ -o test_output/dataset/ -n 50 -s 128 -t 2 --seed 42
+```
+
+### Preparazione delle Immagini
+
+Le immagini vengono caricate dalla cartella specificata, convertite in grayscale e croppate centralmente alla dimensione target (default: 128×128). Le immagini troppo piccole vengono saltate automaticamente.
+
+### Test Implementati
+
+| #   | Test                  | Descrizione                                                                   |
+| --- | --------------------- | ----------------------------------------------------------------------------- |
+| 1   | **Sweep Parametri**   | 162 combinazioni di parametri aggregate su N immagini                         |
+| 2   | **Impatto Delta**     | Curva di trade-off qualità vs. robustezza con 12 valori di delta              |
+| 3   | **Robustezza Rumore** | BER al variare del rumore gaussiano ($\sigma$ 0–30) per 3 valori di delta     |
+| 4   | **Robustezza Blur**   | BER al variare dello sfocamento (raggio 0–5) per 3 valori di delta            |
+| 5   | **Robustezza JPEG**   | BER al variare della compressione JPEG (qualità 30–100) per 3 valori di delta |
+| 6   | **ROI Strategies**    | Confronto tra strategia A (soggetto), B (sfondo), C (automatico) e full image |
+
+### Output
+
+Tutti i risultati vengono salvati nella directory `test_output/dataset/` (configurabile con `--output`):
+
+| File            | Contenuto                                                    |
+| :-------------- | :----------------------------------------------------------- |
+| `agg_sweep.csv` | Media/std/min/max di PSNR, SSIM, BER per ogni configurazione |
+| `agg_delta.csv` | Impatto del delta aggregato su N immagini                    |
+| `agg_noise.csv` | Robustezza al rumore aggregata                               |
+| `agg_blur.csv`  | Robustezza al blur aggregata                                 |
+| `agg_jpeg.csv`  | Robustezza alla compressione JPEG aggregata                  |
+| `agg_roi.csv`   | Confronto strategie ROI con PSNR, SSIM, BER, correttezza     |
+
+Ogni CSV include colonne `_mean`, `_std`, `_min`, `_max` e `correct_pct` (percentuale di estrazione corretta).
+
+### Confronto con Performance Test
+
+| Caratteristica          | `test_performance.py`            | `test_dataset.py`                         |
+| :---------------------- | :------------------------------- | :---------------------------------------- |
+| **Input**               | Singola immagine                 | N immagini dal dataset                    |
+| **Validità statistica** | Risultato puntuale               | Media ± deviazione standard su N immagini |
+| **Output**              | CSV per-immagine                 | CSV aggregati con statistiche             |
+| **ROI**                 | Test automatico singola ROI YOLO | Test automatico strategie A, B, C YOLO    |
+| **Uso consigliato**     | Debug di una configurazione      | Benchmarking scientifico e report finale  |

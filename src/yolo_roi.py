@@ -1,5 +1,10 @@
 import numpy as np
 
+try:
+    from ultralytics import YOLO
+except ImportError:
+    YOLO = None
+
 class BoundingBox:
 
     def __init__(self, x1: int, y1: int, x2: int, y2: int,
@@ -47,6 +52,65 @@ class ROIResult:
     @property
     def roi_pixel_count(self) -> int:
         return int(np.sum(self.mask))
+
+def load_yolo_model(model_path: str = "yolov8n.pt"):
+    if YOLO is None:
+        raise ImportError("Libreria 'ultralytics' non installata. Esegui 'pip install ultralytics'.")
+    return YOLO(model_path)
+
+def detect_objects(model, image_matrix: np.ndarray, conf: float = 0.25) -> list[BoundingBox]:
+    if image_matrix.ndim == 2:
+        img_3c = np.stack([image_matrix]*3, axis=-1)
+    else:
+        img_3c = image_matrix
+
+    img_uint8 = np.clip(img_3c, 0, 255).astype(np.uint8)
+    results = model(img_uint8, conf=conf, verbose=False)
+    
+    bounding_boxes = []
+    if len(results) > 0:
+        result = results[0]
+        boxes = result.boxes
+        if boxes is not None:
+            xyxy = boxes.xyxy.cpu().numpy()
+            confs = boxes.conf.cpu().numpy()
+            cls_ids = boxes.cls.cpu().numpy()
+            names = result.names
+            
+            for i in range(len(xyxy)):
+                x1, y1, x2, y2 = map(int, xyxy[i])
+                box_conf = float(confs[i])
+                class_id = int(cls_ids[i])
+                class_name = names[class_id] if names else str(class_id)
+                
+                bb = BoundingBox(x1, y1, x2, y2, box_conf, class_id, class_name)
+                bounding_boxes.append(bb)
+                
+    bounding_boxes.sort(key=lambda b: b.area, reverse=True)
+    return bounding_boxes
+
+def draw_detections(image_matrix: np.ndarray, bounding_boxes: list[BoundingBox], output_path: str):
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        
+        if image_matrix.ndim == 2:
+            img_pil = Image.fromarray(np.clip(image_matrix, 0, 255).astype(np.uint8)).convert("RGB")
+        else:
+            img_pil = Image.fromarray(np.clip(image_matrix, 0, 255).astype(np.uint8))
+            
+        draw = ImageDraw.Draw(img_pil)
+        
+        for bb in bounding_boxes:
+            # Draw rectangle
+            draw.rectangle([bb.x1, bb.y1, bb.x2, bb.y2], outline="red", width=2)
+            # Draw label
+            label = f"{bb.class_name} ({bb.confidence:.2f})"
+            draw.text((bb.x1, max(0, bb.y1 - 15)), label, fill="red")
+            
+        img_pil.save(output_path)
+        print(f"Rilevamenti salvati in: {output_path}")
+    except Exception as e:
+        print(f"Errore durante il disegno dei bounding box: {e}")
 
 
 def select_roi(

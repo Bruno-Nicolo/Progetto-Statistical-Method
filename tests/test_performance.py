@@ -718,10 +718,19 @@ def test_roi_embedding(
               f"{psnr:>7.2f}dB  {ssim:>5.4f}  {ber:>8.6f}  {ok_str}")
 
     print(f"")
-    print("Strategia B (sfondo):")
+    print("Strategia B (sfondo) con YOLO:")
 
-    bb_center = BoundingBox(w // 4, h // 4, w * 3 // 4, h * 3 // 4, 0.9, 0, "object")
-    roi_result = select_roi((h, w), [bb_center], strategy="B")
+    try:
+        from src.yolo_roi import load_yolo_model, detect_objects, draw_detections
+        yolo_model = load_yolo_model("yolov8n.pt")
+        bboxes = detect_objects(yolo_model, image)
+        
+        yolo_output_path = os.path.join(output_dir, "yolo_detections.png")
+        draw_detections(image, bboxes, yolo_output_path)
+    except ImportError:
+        bboxes = []
+
+    roi_result = select_roi((h, w), bboxes, strategy="B")
     bg_roi_coords = (0, 0, h, w)
 
     bg_capacity = compute_capacity(image, 8, "mid")
@@ -731,7 +740,7 @@ def test_roi_embedding(
             block_size=8, sv_range="mid", delta=15.0,
         )
         psnr_bg = compute_psnr(image, stego_bg)
-        print(f"  Sfondo (escluso box centrale): PSNR={psnr_bg:.2f}dB")
+        print(f"  Sfondo (escluso box YOLO): PSNR={psnr_bg:.2f}dB")
 
     return results
 
