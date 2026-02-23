@@ -626,10 +626,13 @@ def test_roi_strategies_dataset(
             ssim_a = compute_ssim(image, stego_a)
             ber_a = compute_ber(payload_bits, extracted_a)
             correct_a = binary_to_text(extracted_a) == message
-            outside_a = (
-                np.array_equal(image[:bb.y1, :], stego_a[:bb.y1, :]) and
-                np.array_equal(image[bb.y2:, :], stego_a[bb.y2:, :])
-            )
+            if roi_a.selected_box is not None:
+                outside_a = (
+                    np.array_equal(image[:bb.y1, :], stego_a[:bb.y1, :]) and
+                    np.array_equal(image[bb.y2:, :], stego_a[bb.y2:, :])
+                )
+            else:
+                outside_a = True
             config_results.setdefault("A_soggetto", []).append({
                 "psnr": psnr_a, "ssim": ssim_a, "ber": ber_a,
                 "correct": correct_a, "outside_intact": outside_a,
@@ -696,10 +699,13 @@ def test_roi_strategies_dataset(
             ssim_c = compute_ssim(image, stego_c)
             ber_c = compute_ber(payload_bits, extracted_c)
             correct_c = binary_to_text(extracted_c) == message
-            outside_c = (
-                np.array_equal(image[:bb_c.y1, :], stego_c[:bb_c.y1, :]) and
-                np.array_equal(image[bb_c.y2:, :], stego_c[bb_c.y2:, :])
-            )
+            if roi_c.selected_box is not None:
+                outside_c = (
+                    np.array_equal(image[:bb_c.y1, :], stego_c[:bb_c.y1, :]) and
+                    np.array_equal(image[bb_c.y2:, :], stego_c[bb_c.y2:, :])
+                )
+            else:
+                outside_c = True
             config_results.setdefault("C_automatico", []).append({
                 "psnr": psnr_c, "ssim": ssim_c, "ber": ber_c,
                 "correct": correct_c, "outside_intact": outside_c,
