@@ -1,9 +1,9 @@
 """
-Test su dataset di immagini 128x128 con aggregazione dei risultati.
+Test su dataset di immagini con aggregazione dei risultati.
 
-Esegue i test di performance su N immagini dalla cartella artwork/,
-ridimensiona ciascuna a 128x128 (crop centrale), e produce CSV aggregati
-con media, deviazione standard, min e max per ogni configurazione.
+Esegue i test di performance su N immagini dalla cartella artwork/
+e produce CSV aggregati con media, deviazione standard, min e max
+per ogni configurazione.
 """
 
 import argparse
@@ -91,23 +91,14 @@ def apply_jpeg_compression(image: np.ndarray, quality: int = 75) -> np.ndarray:
     return np.array(compressed, dtype=np.float64)
 
 
-def center_crop(image: np.ndarray, target_size: int) -> np.ndarray:
-    """Crop centrale dell'immagine a target_size x target_size."""
-    h, w = image.shape[:2]
-    if h < target_size or w < target_size:
-        return None
-    y_start = (h - target_size) // 2
-    x_start = (w - target_size) // 2
-    return image[y_start:y_start + target_size, x_start:x_start + target_size]
 
 
 def load_dataset(
     dataset_dir: str,
     max_images: int,
-    target_size: int,
     seed: int = 42,
 ) -> list[tuple[str, np.ndarray]]:
-    """Carica le immagini, le converte in grayscale e applica il crop centrale."""
+    """Carica le immagini e le converte in grayscale."""
     extensions = ('*.jpeg', '*.jpg', '*.png', '*.bmp', '*.tiff')
     all_paths = []
     for ext in extensions:
@@ -124,17 +115,13 @@ def load_dataset(
             break
         try:
             img = load_image_as_matrix(path, grayscale=True)
-            cropped = center_crop(img, target_size)
-            if cropped is None:
-                skipped += 1
-                continue
-            images.append((os.path.basename(path), cropped))
+            images.append((os.path.basename(path), img))
         except Exception:
             skipped += 1
             continue
 
     print(f"Dataset: {len(images)} immagini caricate, {skipped} saltate "
-          f"(troppo piccole o non valide)")
+          f"(non valide)")
     return images
 
 
@@ -793,8 +780,7 @@ def main():
                         help="Directory di output per i CSV aggregati (default: test_output/dataset/)")
     parser.add_argument("-n", "--max-images", type=int, default=50,
                         help="Numero massimo di immagini da caricare (default: 50)")
-    parser.add_argument("-s", "--size", type=int, default=128,
-                        help="Dimensione target per il crop (default: 128)")
+
     parser.add_argument("-t", "--test", type=int, default=None,
                         help="Esegui solo il test specificato (1-6)")
     parser.add_argument("--seed", type=int, default=42,
@@ -810,13 +796,13 @@ def main():
     print(f"Dataset:     {args.dataset}")
     print(f"Output:      {output_dir}")
     print(f"Max images:  {args.max_images}")
-    print(f"Crop size:   {args.size}x{args.size}")
+
     print(f"Seed:        {args.seed}")
     print()
 
     t_start = time.time()
 
-    images = load_dataset(args.dataset, args.max_images, args.size, args.seed)
+    images = load_dataset(args.dataset, args.max_images, args.seed)
     if not images:
         print("Nessuna immagine caricata. Controlla il percorso del dataset.")
         sys.exit(1)
